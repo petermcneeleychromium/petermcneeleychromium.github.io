@@ -1,5 +1,26 @@
 <!DOCTYPE html>
 <html>
+  
+<script>
+   requestAnimationFrame(drawAnimation);
+  var frame_count = 0;
+  function drawAnimation () {
+    
+    if(frame_count % 10 == 0)
+    {
+	window.scroll({
+	  top: frame_count*10,
+	  left: 0,
+	  behavior: 'smooth'
+	});
+	frame_count = frame_count % 120;
+    }
+
+    frame_count++;
+    requestAnimationFrame(drawAnimation);
+  }
+
+  </script>
 <head>
   <title>60 fps scrolling test</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -7,32 +28,6 @@
 </head>
 <body>
 </body>
-  
-   <script>
-   requestAnimationFrame(drawAnimation);
-  var frame_count = 0;
-  function drawAnimation () {
-    if(frame_count == 30)
-    {
-	window.scroll({
-	  top: 10000,
-	  left: 0,
-	  behavior: 'smooth'
-	});
-    }
-    else if( frame_count == 60)
-    {
-    	window.scroll({
-	  top: 0,
-	  left: 0,
-	  behavior: 'smooth'
-	});
-    	frame_count = 0;
-    }
-    frame_count++;
-    requestAnimationFrame(drawAnimation);
-  }
 
-  </script>
 </html>
 
