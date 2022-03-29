@@ -1,0 +1,14 @@
+<p id="test"></p>
+<script>
+var start = performance.now()
+function test(obj) {
+return obj.prop + obj.prop;
+}
+var a = { prop: 'a' }, i=0;
+while ( i++ < 1000000000) {
+  test(a);
+}
+var duration = performance.now() - start;
+console.log('duration' + duration)
+document.getElementById("test").innerHTML = duration
+</script>
