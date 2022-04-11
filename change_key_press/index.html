@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Key press test delay</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+</head>
+<body>
+</body>
+  
+   <script>
+   frame_even = false
+     function flipColor () {
+    if(frame_even){
+      document.body.style.backgroundColor = "rgb(255, 180, 0)";
+    } 
+    else
+    { 
+     document.body.style.backgroundColor = "rgb(0, 180, 255)";
+    }
+    frame_even = !frame_even
+  }
+   document.addEventListener('keydown', flipColor);
+
+
+  </script>
+</html>
+
