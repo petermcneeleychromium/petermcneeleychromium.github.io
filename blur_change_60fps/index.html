@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>60 fps Test blur</title>
+  <img src="https://upload.wikimedia.org/wikipedia/commons/2/2c/Rotating_earth_%28large%29.gif" alt="Blur it."  id="imageupdate" >
+</head>
+<body>
+</body>
+  
+   <script>
+   requestAnimationFrame(drawAnimation);
+  var frame_count = 0;
+  function drawAnimation () {
+    var image = document.getElementById('imageupdate');
+    image.style.filter = `blur(${frame_count%60}px)`;
+    console.log(image.style.filter);
+    frame_count = requestAnimationFrame(drawAnimation);
+  }
+
+  </script>
+</html>
+
