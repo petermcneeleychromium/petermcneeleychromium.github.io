@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test blur simple </title>
+  <div></div>
+</head>
+<body>
+</body>
+  <style>
+  div {
+  width: 233px;
+  height: 233px;
+  background: url("https://upload.wikimedia.org/wikipedia/commons/c/ce/PNG_demo_Banana.png");
+  -webkit-animation: blur 2s infinite;
+}
+
+@keyframes blur {
+  0%,
+  70% {
+    -webkit-filter: blur(3px);
+  }
+}
+  </style>
+
+</html>
+
