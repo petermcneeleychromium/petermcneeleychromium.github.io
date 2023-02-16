@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Fake meets video nxm (default 4x4)</title>
+  <!-- flexbox usage  https://css-tricks.com/snippets/css/a-guide-to-flexbox/ -->
+  <style>
+    .myDiv {
+      border: 5px outset rgb(75, 83, 3);
+      background-color: rgb(7, 80, 17);
+      text-align: center;
+    }
+    .myDivRow {
+      border: 5px outset rgb(76, 189, 91);
+      background-color: rgb(0, 0, 0);
+      text-align: center;
+      display: flex;
+      gap: 10px 10px;
+    }
+    </style>
+</head>
+
+ <body>
+ <!-- Source "gs://chromiumos-test-assets-public/tast/cros/video/180p_60fps_600frames_20220831.h264.mp4 -->
+   
+    <div class="myDiv"  id="basic-video-div">
+      <video height="90"   id="basic-video" src="https://user-images.githubusercontent.com/96925679/213504863-8116627e-a078-4d48-a520-2625fd3cd46d.mp4"  muted loop autoplay preload="auto"></video>
+    </div>
+  </body>
+
+ <script>
+   
+  
+    let params = new URLSearchParams(document.location.search);
+  var xx = params.get("x") ?  params.get("x") :4;
+  var yy = params.get("y")?  params.get("y") :4;
+  var hh = params.get("h")?  params.get("h") :90;
+   for( i =0 ;i < yy;i++){
+    const newDiv = document.createElement("div");
+    newDiv.className = "myDivRow";
+     for(j =0; j < xx; j++){
+      new_video_element = document.getElementById("basic-video-div").cloneNode(true);
+
+    
+      new_video_element.firstChild.nextSibling.addEventListener('loadedmetadata', function() {
+        this.height = hh;
+        this.currentTime = (i*j)/13.0;}, false);
+      newDiv.append(new_video_element);
+     }
+     document.body.append(newDiv);
+   }
+
+   // Remove the original so we have x*y videos
+   document.body.removeChild(document.getElementById("basic-video-div"))
+ </script>
+
+</html>
