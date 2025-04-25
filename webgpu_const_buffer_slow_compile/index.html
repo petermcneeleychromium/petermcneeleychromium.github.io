@@ -1,0 +1,106 @@
+<html>
+<button id='runthetest'>
+  <span>ClickMe</span>
+</button>
+<p id="runresulttext"> ... waiting click </p>
+
+<input type="checkbox" id="usealternative" name="usealternative" value="usealternative">
+<label for="usealternative"> Use alternative shader</label><br>
+
+<canvas id="c"></canvas>
+
+<script>
+  var run_count = 0;
+  document.querySelector('#runthetest').onclick = d => {
+    navigator.gpu.requestAdapter().then(
+      d => d.requestDevice({
+      }).then(device => { // Intentionally "device", we can call configure({device, ...})
+
+        x = c.getContext(`webgpu`);
+
+        u = device.createBuffer({
+          size: 8, // time & delta f32
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        dst = device.createBuffer({
+          size: 8, // time & delta f32
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+
+        layout = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: `storage` } },
+
+          ]
+        });
+
+        shader_code_bad = `
+@group(0)@binding(0) var < storage,read_write > A: array < i32 >;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32) {
+  var b = 0i;
+      for (var i = 0;  i < 40; i++) {
+        var n = array(13, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 20, 0, 23, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 20, 0, 18, 0, 20, 0, 11, 18, 15, 18, 23, 18, 15, 18, 10, 18, 13, 18, 22, 18, 13, 18, 10, 13, 18, 22, 23, 22, 18, 13, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 13, 0, 11, 0, 9, 0, 11, 0, 13, 0, 11, 0, 9, 0, 8, 0, 13, 1, 13, 8, 13, 8, 13, 8, 13, 8, 16, 11, 13, 8, 16, 11, 13, 8, 13, 1, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 13, 11, 18, 13, 13, 11, 18, 13, 1)[i];
+         b +=  n;
+      }
+  A[g] = b;
+}`;
+
+                shader_code_good = `
+@group(0)@binding(0) var < storage,read_write > A: array < i32 >;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32) {
+ var q = array(13, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 20, 0, 23, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 20, 0, 18, 0, 20, 0, 11, 18, 15, 18, 23, 18, 15, 18, 10, 18, 13, 18, 22, 18, 13, 18, 10, 13, 18, 22, 23, 22, 18, 13, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 13, 0, 11, 0, 9, 0, 11, 0, 13, 0, 11, 0, 9, 0, 8, 0, 13, 1, 13, 8, 13, 8, 13, 8, 13, 8, 16, 11, 13, 8, 16, 11, 13, 8, 13, 1, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 13, 11, 18, 13, 13, 11, 18, 13, 1);
+  var b = 0i;
+      for (var i = 0;  i < 40; i++) {
+        var n = q[i];
+         b +=  n;
+      }
+  A[g] = b;
+}`;
+
+        var use_alternative = document.getElementById('usealternative').checked ;
+        var shader_code_selected = (use_alternative ? shader_code_good : shader_code_bad);
+        p = device.createComputePipeline({
+          layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+          compute: {
+            module: device.createShaderModule({ code: shader_code_selected })
+          }
+        });
+
+
+
+        q = device.createCommandEncoder();
+        e = q.beginComputePass();
+
+        g = device.createBindGroup({
+          layout,
+          entries: [
+            { binding: 0, resource: { buffer: u } },
+          ]
+        });
+
+        // #reorder
+        e.setPipeline(p); // #and
+        e.setBindGroup(0, g); // #endreorder
+        e.dispatchWorkgroups(64, 64, 64);
+        e.end();
+        q.copyBufferToBuffer(u, 0, dst, 0, 8);
+
+        device.queue.submit([q.finish()]);
+
+        dst.mapAsync(GPUMapMode.READ).then(d => {
+          console.log("done !");
+          runresulttextTextElement = document.querySelector("#runresulttext");
+          run_count++;
+          runresulttextTextElement.innerHTML = "Test ran times= " + run_count;
+
+        });
+
+      })) // navigator promise
+
+  } // onclick
+</script>
