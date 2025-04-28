@@ -10,6 +10,10 @@
 <input type="checkbox" id="usealternative" name="usealternative" value="usealternative">
 <label for="usealternative"> Use alternative shader</label><br>
 
+<label for="dispatchcount">Dispatch Cubed:</label>
+<input name="usealternative" type="number" value="64" min="1" max="256" step="1"  id="dispatchcountid"/>
+
+
 <canvas id="c"></canvas>
 
 <script>
@@ -87,9 +91,10 @@ fn main(@builtin(local_invocation_index) g: u32) {
         });
 
         // #reorder
+        var dispatch_count = (document.getElementById("dispatchcountid").value);
         e.setPipeline(p); // #and
         e.setBindGroup(0, g); // #endreorder
-        e.dispatchWorkgroups(64, 64, 64);
+        e.dispatchWorkgroups(dispatch_count, dispatch_count, dispatch_count);
         e.end();
         q.copyBufferToBuffer(u, 0, dst, 0, 8);
 
