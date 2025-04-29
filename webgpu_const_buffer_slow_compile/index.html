@@ -120,7 +120,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
         e.setPipeline(p); // #and
         e.setBindGroup(0, g); // #endreorder
         for(var i=0; i < dispatch_number;i++){
-          e.dispatchWorkgroups(dispatch_count, dispatch_count, dispatch_count);
+          e.dispatchWorkgroups(dispatch_cube_size, dispatch_cube_size, dispatch_cube_size);
         }
         e.end();
         q.copyBufferToBuffer(u, 0, dst, 0, 8);
