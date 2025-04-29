@@ -115,11 +115,11 @@ fn main(@builtin(local_invocation_index) g: u32) {
         });
 
         // #reorder
-        var dispatch_cube_size = (document.getElementById("dispatchcubedid").value);
-        var dispatch_number = (document.getElementById("dispatchnumberid").value);
+        var dispatch_cube_size = Number(document.getElementById("dispatchcubedid").value);
+        var dispatch_number = Number(document.getElementById("dispatchnumberid").value);
         e.setPipeline(p); // #and
         e.setBindGroup(0, g); // #endreorder
-        for(var i; i < dispatch_number;i++){
+        for(var i=0; i < dispatch_number;i++){
           e.dispatchWorkgroups(dispatch_count, dispatch_count, dispatch_count);
         }
         e.end();
