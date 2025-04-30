@@ -1,0 +1,133 @@
+<html>
+
+<p> Slow compile shader (~20 seconds) click the button and wait. </p>
+
+<button id='runthetest'>
+  <span>Click me!</span>
+</button>
+<p id="runresulttext"> ... waiting click </p>
+
+
+<input type="checkbox" id="usehoist" name="usehoist" value="usehoist">
+<label for="usehoist"> Use hoist shader</label><br>
+
+<label for="dispatchcubed">Dispatch Cubed:</label>
+<input name="dispatchcubed" type="number" value="64" min="1" max="256" step="1"  id="dispatchcubedid"/>
+
+<label for="dispatchnumber">Number of dispatches:</label>
+<input name="dispatchnumber" type="number" value="1" min="1" max="256" step="1"  id="dispatchnumberid"/>
+
+
+
+<canvas id="c"></canvas>
+
+<script>
+  var run_count = 0;
+  document.querySelector('#runthetest').onclick = d => {
+    c.width = 256;
+    c.height = 256; 
+
+    navigator.gpu.requestAdapter().then(
+      d => d.requestDevice({
+      }).then(device => { // Intentionally "device", we can call configure({device, ...})
+
+        x = c.getContext(`webgpu`);
+        x.configure({
+    device,
+    format: "rgba8unorm",
+    usage: 24 // GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING
+});
+        layout = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, storageTexture: { format:  "rgba8unorm" }  },
+
+          ]
+        });
+
+        shader_code_bad = `
+@group(0) @binding(0) var T: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32) {
+  var b = 0i;
+      for (var i = 0;  i < 20; i++) {
+        var n = array(13, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 
+        0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 13, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 20, 0, 23, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+        23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 20, 0, 18, 0, 
+        20, 0, 11, 18, 15, 18, 23, 18, 15, 18, 10, 18, 13, 18, 22, 18, 13, 18, 10, 13, 18, 22, 23, 22, 18, 13, 13, 0, 0, 0, 13, 
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 13, 0, 11, 0, 9, 0, 11, 0, 13, 0, 11, 0, 9, 0, 8, 0, 13, 1, 
+        13, 8, 13, 8, 13, 8, 13, 8, 16, 11, 13, 8, 16, 11, 13, 8, 13, 1, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 
+        8, 13, 13, 11, 18, 13, 13, 11, 18, 13, 1)[i];
+         b +=  n;
+      }
+            var as_f = f32(b);
+  textureStore(T, vec2u(0,0), vec4f(as_f,as_f,as_f,1.0));
+}`;
+
+
+
+
+                shader_code_good = `
+@group(0) @binding(0) var T: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32) {
+ var q = array(13, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 
+ 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 
+ 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 20, 0, 23, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 
+ 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 0, 1, 0, 0, 0, 0, 0, 
+ 0, 0, 0, 0, 23, 0, 20, 0, 18, 0, 20, 0, 11, 18, 15, 18, 23, 18, 15, 18, 10, 18, 13, 18, 22, 18, 13, 18, 10, 13, 
+ 18, 22, 23, 22, 18, 13, 13, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 13, 0, 11, 
+ 0, 9, 0, 11, 0, 13, 0, 11, 0, 9, 0, 8, 0, 13, 1, 13, 8, 13, 8, 13, 8, 13, 8, 16, 11, 13, 8, 16, 11, 13, 8, 13, 
+ 1, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 18, 16, 8, 13, 13, 11, 18, 13, 13, 11, 18, 13, 1);
+  var b = 0i;
+      for (var i = 0;  i < 20; i++) {
+        var n = q[i];
+         b +=  n;
+      }
+   var as_f = f32(b);
+   textureStore(T, vec2u(0,0), vec4f(as_f,as_f,as_f,1.0));
+}`;
+
+        var use_hoist= document.getElementById('usehoist').checked ;
+
+        var shader_code_selected = use_hoist ? shader_code_good : shader_code_bad;
+        p = device.createComputePipeline({
+          layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+          compute: {
+            module: device.createShaderModule({ code: shader_code_selected })
+          }
+        });
+
+
+
+        q = device.createCommandEncoder();
+        e = q.beginComputePass();
+
+        view_buffer =  x.getCurrentTexture().createView();
+        g = device.createBindGroup({
+          layout,
+          entries: [
+            { binding: 0, resource: view_buffer },
+          ]
+        });
+
+        // #reorder
+        var dispatch_cube_size = Number(document.getElementById("dispatchcubedid").value);
+        var dispatch_number = Number(document.getElementById("dispatchnumberid").value);
+        e.setPipeline(p); // #and
+        e.setBindGroup(0, g); // #endreorder
+        for(var i=0; i < dispatch_number;i++){
+          e.dispatchWorkgroups(dispatch_cube_size, dispatch_cube_size, dispatch_cube_size);
+        }
+        e.end();
+
+        device.queue.submit([q.finish()]);
+
+
+
+      })) // navigator promise
+
+  } // onclick
+</script>
