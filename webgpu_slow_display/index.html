@@ -3,10 +3,10 @@
 <p> Slow execution shader (~20 seconds) click the button and wait. </p>
 
 <div>
-<button id='runthetest'>
-  <span>Click me!</span>
-</button>
-<p id="runresulttext"> ... waiting click </p>
+  <button id='runthetest'>
+    <span>Click me!</span>
+  </button>
+  <p id="runresulttext"> ... waiting click </p>
 </div>
 
 <input type="checkbox" id="usehoistmusic" name="usehoistmusic" value="usehoistmusic">
@@ -15,58 +15,61 @@
 <input type="checkbox" id="usehoistdisplay" name="usehoistdisplay" value="usehoistdisplay">
 <label for="usehoistdisplay"> Use hoist shader display</label><br>
 
-<label for="dispatchcubed">Dispatch Cubed:</label>
-<input name="dispatchcubed" type="number" value="64" min="1" max="256" step="1"  id="dispatchcubedid"/>
+<input type="checkbox" id="disabledisplay" name="disabledisplay" value="disabledisplay">
+<label for="disabledisplay"> Disable display dispatch/label><br>
 
-<label for="dispatchnumber">Number of dispatches:</label>
-<input name="dispatchnumber" type="number" value="1" min="1" max="256" step="1"  id="dispatchnumberid"/>
+  <label for="dispatchcubed">Dispatch Cubed:</label>
+  <input name="dispatchcubed" type="number" value="64" min="1" max="256" step="1" id="dispatchcubedid" />
+
+  <label for="dispatchnumber">Number of dispatches:</label>
+  <input name="dispatchnumber" type="number" value="1" min="1" max="256" step="1" id="dispatchnumberid" />
 
 
-<div>
-<canvas id="c"></canvas>
-</div>
+  <div>
+    <canvas id="c"></canvas>
+  </div>
 
-<script>
-  var run_count = 0;
-  document.querySelector('#runthetest').onclick = d => {
-    c.width = 256;
-    c.height = 256; 
+  <script>
+    var run_count = 0;
+    document.querySelector('#runthetest').onclick = d => {
+      c.width = 256;
+      c.height = 256;
 
-    navigator.gpu.requestAdapter().then(
-      d => d.requestDevice({
-      }).then(device => { // Intentionally "device", we can call configure({device, ...})
+      navigator.gpu.requestAdapter().then(
+        d => d.requestDevice({
+        }).then(device => { // Intentionally "device", we can call configure({device, ...})
 
-        x = c.getContext(`webgpu`);
-        x.configure({
-    device,
-    format: "rgba8unorm",
-    usage: 24 // GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING
-});
-      // fake music buffers
-      u = device.createBuffer({
-          size: 8, // time & delta f32
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
-        });
+          x = c.getContext(`webgpu`);
+          x.configure({
+            device,
+            format: "rgba8unorm",
+            usage: 24 // GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING
+          });
+          // fake music buffers
+          u = device.createBuffer({
+            size: 8, // time & delta f32
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+          });
 
-        dst = device.createBuffer({
-          size: 8, // time & delta f32
-          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-        });
+          dst = device.createBuffer({
+            size: 8, // time & delta f32
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+          });
 
-        layout_display = device.createBindGroupLayout({
-          entries: [
-            { binding: 0, visibility: GPUShaderStage.COMPUTE, storageTexture: { format:  "rgba8unorm" }  },
+          layout_display = device.createBindGroupLayout({
+            entries: [
+              { binding: 0, visibility: GPUShaderStage.COMPUTE, storageTexture: { format: "rgba8unorm" } },
 
-          ]
-        });
+            ]
+          });
 
-        layout_music =  device.createBindGroupLayout({
-          entries: [
-            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: `storage` } },
-          ]
-        });
+          layout_music = device.createBindGroupLayout({
+            entries: [
+              { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: `storage` } },
+            ]
+          });
 
-        shader_code_bad_display = `
+          shader_code_bad_display = `
 @group(0) @binding(0) var T: texture_storage_2d<rgba8unorm, write>;
 
 @compute @workgroup_size(256)
@@ -90,7 +93,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
 
 
 
-                shader_code_good_display = `
+          shader_code_good_display = `
 @group(0) @binding(0) var T: texture_storage_2d<rgba8unorm, write>;
 
 @compute @workgroup_size(256)
@@ -114,7 +117,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
 
 
 
-shader_code_bad_music = `
+          shader_code_bad_music = `
 @group(0)@binding(0) var < storage,read_write > A: array < i32 >;
 
 @compute @workgroup_size(256)
@@ -143,7 +146,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
 
 
 
-                shader_code_good_music = `
+          shader_code_good_music = `
 @group(0)@binding(0) var < storage,read_write > A: array < i32 >;
 
 @compute @workgroup_size(256)
@@ -167,73 +170,80 @@ fn main(@builtin(local_invocation_index) g: u32) {
   A[g] = b;
 }`;
 
-        var use_hoist_display= document.getElementById('usehoistdisplay').checked ;
+          var use_hoist_display = document.getElementById('usehoistdisplay').checked;
 
-        var shader_code_selected = use_hoist_display ? shader_code_good_display : shader_code_bad_display;
-        p_display = device.createComputePipeline({
-          layout: device.createPipelineLayout({ bindGroupLayouts: [layout_display] }),
-          compute: {
-            module: device.createShaderModule({ code: shader_code_selected })
+          var shader_code_selected = use_hoist_display ? shader_code_good_display : shader_code_bad_display;
+          p_display = device.createComputePipeline({
+            layout: device.createPipelineLayout({ bindGroupLayouts: [layout_display] }),
+            compute: {
+              module: device.createShaderModule({ code: shader_code_selected })
+            }
+          });
+
+          var use_hoist_music = document.getElementById('usehoistmusic').checked;
+          shader_code_selected = use_hoist_music ? shader_code_good_music : shader_code_bad_music;
+          p_music = device.createComputePipeline({
+            layout: device.createPipelineLayout({ bindGroupLayouts: [layout_music] }),
+            compute: {
+              module: device.createShaderModule({ code: shader_code_selected })
+            }
+          });
+
+
+          var disable_display = document.getElementById('disabledisplay').checked;
+
+
+
+          q = device.createCommandEncoder();
+          e = q.beginComputePass();
+
+          g_music = device.createBindGroup({
+            layout: layout_music,
+            entries: [
+              { binding: 0, resource: { buffer: u } },
+            ]
+          });
+
+
+          view_buffer = x.getCurrentTexture().createView();
+          g_display = device.createBindGroup({
+            layout: layout_display,
+            entries: [
+              { binding: 0, resource: view_buffer },
+            ]
+          });
+
+          // #reorder
+          var dispatch_cube_size = Number(document.getElementById("dispatchcubedid").value);
+          var dispatch_number = Number(document.getElementById("dispatchnumberid").value);
+          e.setPipeline(p_music); // #and
+          e.setBindGroup(0, g_music);
+          for (var i = 0; i < dispatch_number; i++) {
+            e.dispatchWorkgroups(dispatch_cube_size, dispatch_cube_size, dispatch_cube_size);
           }
-        });
-
-        var use_hoist_music= document.getElementById('usehoistmusic').checked ;
-        shader_code_selected = use_hoist_music ? shader_code_good_music: shader_code_bad_music;
-        p_music = device.createComputePipeline({
-          layout: device.createPipelineLayout({ bindGroupLayouts: [layout_music] }),
-          compute: {
-            module: device.createShaderModule({ code: shader_code_selected })
+          if (!disable_display) {
+            e.setPipeline(p_display);
+            e.setBindGroup(0, g_display);
+            for (var i = 0; i < dispatch_number; i++) {
+              e.dispatchWorkgroups(dispatch_cube_size, dispatch_cube_size, dispatch_cube_size);
+            }
           }
-        });
 
 
-
-        q = device.createCommandEncoder();
-        e = q.beginComputePass();
-
-        g_music = device.createBindGroup({
-          layout: layout_music,
-          entries: [
-            { binding: 0, resource: { buffer: u }},
-          ]
-        });
+          e.end();
+          q.copyBufferToBuffer(u, 0, dst, 0, 8);
+          device.queue.submit([q.finish()]);
 
 
-        view_buffer =  x.getCurrentTexture().createView();
-        g_display = device.createBindGroup({
-          layout: layout_display,
-          entries: [
-            { binding: 0, resource: view_buffer },
-          ]
-        });
+          dst.mapAsync(GPUMapMode.READ).then(d => {
+            console.log("done !");
+            runresulttextTextElement = document.querySelector("#runresulttext");
+            run_count++;
+            runresulttextTextElement.innerHTML = "Test ran times= " + run_count;
 
-        // #reorder
-        var dispatch_cube_size = Number(document.getElementById("dispatchcubedid").value);
-        var dispatch_number = Number(document.getElementById("dispatchnumberid").value);
-        e.setPipeline(p_music); // #and
-        e.setBindGroup(0, g_music); 
-        for(var i=0; i < dispatch_number;i++){
-          e.dispatchWorkgroups(dispatch_cube_size, dispatch_cube_size, dispatch_cube_size);
-        }
-        e.setPipeline(p_display);
-        e.setBindGroup(0, g_display);
-        for(var i=0; i < dispatch_number;i++){
-          e.dispatchWorkgroups(dispatch_cube_size, dispatch_cube_size, dispatch_cube_size);
-        }
-        e.end();
-        q.copyBufferToBuffer(u, 0, dst, 0, 8);
-        device.queue.submit([q.finish()]);
+          });
 
+        })) // navigator promise
 
-        dst.mapAsync(GPUMapMode.READ).then(d => {
-          console.log("done !");
-          runresulttextTextElement = document.querySelector("#runresulttext");
-          run_count++;
-          runresulttextTextElement.innerHTML = "Test ran times= " + run_count;
-
-        });
-
-      })) // navigator promise
-
-  } // onclick
-</script>
+    } // onclick
+  </script>
