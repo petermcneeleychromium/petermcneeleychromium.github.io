@@ -165,7 +165,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
   A[g] = b;
 }`;
 
-        var use_hoist_display= document.getElementById('usehoistmusic').checked ;
+        var use_hoist_display= document.getElementById('usehoistdisplay').checked ;
 
         var shader_code_selected = use_hoist_display ? shader_code_good_display : shader_code_bad_display;
         p_display = device.createComputePipeline({
