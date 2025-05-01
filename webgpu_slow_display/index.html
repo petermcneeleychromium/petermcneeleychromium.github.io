@@ -2,11 +2,12 @@
 
 <p> Slow execution shader (~20 seconds) click the button and wait. </p>
 
+<div>
 <button id='runthetest'>
   <span>Click me!</span>
 </button>
 <p id="runresulttext"> ... waiting click </p>
-
+</div>
 
 <input type="checkbox" id="usehoistmusic" name="usehoistmusic" value="usehoistmusic">
 <label for="usehoistmusic"> Use hoist shader music</label><br>
@@ -21,8 +22,9 @@
 <input name="dispatchnumber" type="number" value="1" min="1" max="256" step="1"  id="dispatchnumberid"/>
 
 
-
+<div>
 <canvas id="c"></canvas>
+</div>
 
 <script>
   var run_count = 0;
