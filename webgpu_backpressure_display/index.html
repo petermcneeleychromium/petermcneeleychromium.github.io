@@ -24,7 +24,7 @@
   //"use strict";
   var run_count = 0;
   document.querySelector('#runthetest').onclick = d => {
-    c.width = 512;
+    c.width = 256;
     c.height = 256;
 
     navigator.gpu.requestAdapter().then(
@@ -52,17 +52,27 @@
           ]
         });
 
-        shader_code_good_display = `
+
+        shader_code_inc = `
+@group(0) @binding(0) var T: texture_storage_2d<rgba8unorm, write>;
+@group(0)@binding(1) var < storage,read_write > A: array < u32 >;
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32,
+@builtin(workgroup_id) wg: vec3u) {
+      if(wg.x == 0&& wg.y == 0 && wg.z ==0 && g==0){
+        A[0] = A[0]+1;
+        A[0] = A[0] % 60;
+      }
+}`;
+
+
+        shader_code_display = `
 @group(0) @binding(0) var T: texture_storage_2d<rgba8unorm, write>;
 @group(0)@binding(1) var < storage,read_write > A: array < u32 >;
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) g: u32,
 @builtin(workgroup_id) wg: vec3u) {
-      if(wg.x == 0&& wg.y == 0 && wg.z ==0 && g==0){
-        A[0] = A[0]+1;
-        A[0] = A[0] % 512;
-      }
  var q = array(13, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 
  0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 13, 0, 13, 
  0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 20, 0, 23, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 13, 0, 0, 0, 
@@ -77,20 +87,29 @@ fn main(@builtin(local_invocation_index) g: u32,
          b +=  n;
       }
    var as_f = f32(b)/10000.0f;
-   if(A[0]==wg.x)
-   {
-        as_f =  as_f + 0.97;
-   }
+   var in_rad =(f32(A[0])/60.0)*2.0*3.14159;
+  var pos_circle = vec2f(sin(in_rad),cos(in_rad))*120.0;
+  var pos_my = vec2f(f32(wg.x), f32(g)) - vec2f(128.0f);
+  if( length(pos_my - pos_circle) < 5.0){
+        as_f +=0.999;
+      }
+
    textureStore(T, vec2u(wg.x,g), vec4f(as_f,as_f,as_f,1.0));
 }`;
+
+        p_inc = device.createComputePipeline({
+          layout: device.createPipelineLayout({ bindGroupLayouts: [layout_display] }),
+          compute: {
+            module: device.createShaderModule({ code: shader_code_inc })
+          }
+        });
 
         p_display = device.createComputePipeline({
           layout: device.createPipelineLayout({ bindGroupLayouts: [layout_display] }),
           compute: {
-            module: device.createShaderModule({ code: shader_code_good_display })
+            module: device.createShaderModule({ code: shader_code_display })
           }
         });
-
 
         // #reorder
         f = function () {
@@ -107,10 +126,13 @@ fn main(@builtin(local_invocation_index) g: u32,
           q = device.createCommandEncoder();
           e = q.beginComputePass();
 
+          e.setPipeline(p_inc);
+          e.setBindGroup(0, g_display);
+          e.dispatchWorkgroups(1,);
           e.setPipeline(p_display);
           e.setBindGroup(0, g_display);
           for (var i = 0; i < dispatch_number; i++) {
-            e.dispatchWorkgroups(512, dispatch_cube_size, 1);
+            e.dispatchWorkgroups(256, dispatch_cube_size, 1);
           }
           e.end();
           device.queue.submit([q.finish()]);
