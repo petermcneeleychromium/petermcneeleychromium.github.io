@@ -1,0 +1,137 @@
+<html>
+
+<p> Bad pipeline click the button and wait. </p>
+
+<button id='runthetest'>
+  <span>Click me!</span>
+</button>
+<p id="runresulttext"> ... waiting click </p>
+
+
+<input type="checkbox" id="usehoist" name="usehoist" value="usehoist">
+<label for="usehoist"> Use inlined (not function) </label><br>
+
+
+<canvas id="c"></canvas>
+
+<script>
+  var run_count = 0;
+  document.querySelector('#runthetest').onclick = d => {
+    navigator.gpu.requestAdapter().then(
+      d => d.requestDevice({
+      }).then(device => { // Intentionally "device", we can call configure({device, ...})
+
+        x = c.getContext(`webgpu`);
+
+        u = device.createBuffer({
+          size: 8, // time & delta f32
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+        
+          const depthTexture = device.createTexture({
+        size: [c.width, c.height],
+        format: 'depth24plus',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        label: 'depthTexture',
+      });
+
+      const depthTextureView = depthTexture.createView({
+        label: 'depthTextureView',
+      });
+
+        dst = device.createBuffer({
+          size: 8, // time & delta f32
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+
+        layout = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: `storage` } },
+                {
+      binding: 1,
+      visibility: GPUShaderStage.COMPUTE,
+      texture: { sampleType: 'depth' },
+    },
+
+          ]
+        });
+
+        
+        
+        
+                        shader_code_good = `
+@group(0)@binding(0) var < storage,read_write > A: array < i32 >;
+
+@binding(1) @group(0) var opaqueDepthTexture: texture_depth_2d;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32) {
+  let opaqueDepth = textureLoad(opaqueDepthTexture, vec2(i32(g),i32(g)), 0);
+  A[g] = i32(opaqueDepth);
+}`;
+
+                shader_code_bad = `
+@group(0)@binding(0) var < storage,read_write > A: array < i32 >;
+
+@binding(1) @group(0) var opaqueDepthTexture: texture_depth_2d;
+
+fn myLoad(tex: texture_depth_2d, uv: vec2<i32>) -> f32 {
+  return textureLoad(tex, uv, 0);
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) g: u32) {
+  let opaqueDepth = myLoad(opaqueDepthTexture, vec2(i32(g),i32(g)));
+  A[g] = i32(opaqueDepth);
+}`;
+
+        var use_hoist= document.getElementById('usehoist').checked ;
+        var shader_code_selected =  shader_code_good;
+        p = device.createComputePipeline({
+          layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+          compute: {
+            module: device.createShaderModule({ code: (use_hoist ? shader_code_good : shader_code_bad) })
+          }
+        });
+
+
+
+        q = device.createCommandEncoder();
+        e = q.beginComputePass();
+
+        g = device.createBindGroup({
+          layout,
+          entries: [
+            { binding: 0, resource: { buffer: u } },
+                  {
+        binding: 1,
+        resource: depthTextureView,
+      },
+          ]
+        });
+
+        // #reorder
+        var dispatch_cube_size =1;
+        var dispatch_number =1;
+        e.setPipeline(p); // #and
+        e.setBindGroup(0, g); // #endreorder
+        for(var i=0; i < dispatch_number;i++){
+          e.dispatchWorkgroups(dispatch_cube_size);
+        }
+        e.end();
+        q.copyBufferToBuffer(u, 0, dst, 0, 8);
+
+        device.queue.submit([q.finish()]);
+
+        dst.mapAsync(GPUMapMode.READ).then(d => {
+          console.log("done !");
+          runresulttextTextElement = document.querySelector("#runresulttext");
+          run_count++;
+          runresulttextTextElement.innerHTML = "Test ran times= " + run_count;
+
+        });
+
+      })) // navigator promise
+
+  } // onclick
+</script>
