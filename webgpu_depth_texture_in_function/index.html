@@ -15,6 +15,10 @@
 <input type="checkbox" id="calldispatch" name="calldispatch" value="calldispatch">
 <label for="calldispatch"> Call Dispatch </label><br>
 
+<input type="checkbox" id="onlypipe" name="onlypipe" value="onlypipe">
+<label for="onlypipe"> Only pipe</label><br>
+
+
 
 
 <canvas id="c"></canvas>
@@ -92,6 +96,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
 
         var use_hoist= document.getElementById('usehoist').checked ;
         var disable_dispatch= document.getElementById('calldispatch').checked ;
+        var only_pipe= document.getElementById('onlypipe').checked ;
         var shader_code_selected =  shader_code_good;
         p = device.createComputePipeline({
           layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
@@ -103,30 +108,32 @@ fn main(@builtin(local_invocation_index) g: u32) {
 
 
         q = device.createCommandEncoder();
-        e = q.beginComputePass();
+        if(only_pipe){
+              e = q.beginComputePass();
 
-        g = device.createBindGroup({
-          layout,
-          entries: [
-            { binding: 0, resource: { buffer: u } },
-                  {
-        binding: 1,
-        resource: depthTextureView,
-      },
-          ]
-        });
+              g = device.createBindGroup({
+                layout,
+                entries: [
+                  { binding: 0, resource: { buffer: u } },
+                        {
+              binding: 1,
+              resource: depthTextureView,
+            },
+                ]
+              });
 
-        // #reorder
-        var dispatch_cube_size =1;
-        var dispatch_number =1;
-        e.setPipeline(p); // #and
-        e.setBindGroup(0, g); // #endreorder
-        for(var i=0; i < dispatch_number;i++){
-          if(disable_dispatch){
-            e.dispatchWorkgroups(dispatch_cube_size);
-          }
+              // #reorder
+              var dispatch_cube_size =1;
+              var dispatch_number =1;
+              e.setPipeline(p); // #and
+              e.setBindGroup(0, g); // #endreorder
+              for(var i=0; i < dispatch_number;i++){
+                if(disable_dispatch){
+                  e.dispatchWorkgroups(dispatch_cube_size);
+                }
+              }
+              e.end();
         }
-        e.end();
         q.copyBufferToBuffer(u, 0, dst, 0, 8);
 
         device.queue.submit([q.finish()]);
