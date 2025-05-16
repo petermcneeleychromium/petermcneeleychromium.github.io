@@ -12,6 +12,11 @@
 <label for="usehoist"> Use inlined (not function) </label><br>
 
 
+<input type="checkbox" id="calldispatch" name="calldispatch" value="calldispatch">
+<label for="calldispatch"> Call Dispatch </label><br>
+
+
+
 <canvas id="c"></canvas>
 
 <script>
@@ -86,6 +91,7 @@ fn main(@builtin(local_invocation_index) g: u32) {
 }`;
 
         var use_hoist= document.getElementById('usehoist').checked ;
+        var disable_dispatch= document.getElementById('calldispatch').checked ;
         var shader_code_selected =  shader_code_good;
         p = device.createComputePipeline({
           layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
@@ -116,7 +122,9 @@ fn main(@builtin(local_invocation_index) g: u32) {
         e.setPipeline(p); // #and
         e.setBindGroup(0, g); // #endreorder
         for(var i=0; i < dispatch_number;i++){
-          e.dispatchWorkgroups(dispatch_cube_size);
+          if(disable_dispatch){
+            e.dispatchWorkgroups(dispatch_cube_size);
+          }
         }
         e.end();
         q.copyBufferToBuffer(u, 0, dst, 0, 8);
