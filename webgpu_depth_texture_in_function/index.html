@@ -26,30 +26,22 @@
           size: 8, // time & delta f32
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
         });
-        
-          const depthTexture = device.createTexture({
-        size: [c.width, c.height],
-        format: 'depth24plus',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        label: 'depthTexture',
-      });
 
-      const depthTextureView = depthTexture.createView({
-        label: 'depthTextureView',
-      });
+
 
         dst = device.createBuffer({
           size: 8, // time & delta f32
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
         });
 
+        
         layout = device.createBindGroupLayout({
           entries: [
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: `storage` } },
                 {
       binding: 1,
       visibility: GPUShaderStage.COMPUTE,
-      texture: { sampleType: 'depth' },
+      texture: { sampleType: 'float' },
     },
 
           ]
@@ -58,30 +50,27 @@
         
         
         
-                        shader_code_good = `
-@group(0)@binding(0) var < storage,read_write > A: array < i32 >;
-
-@binding(1) @group(0) var opaqueDepthTexture: texture_depth_2d;
+                        shader_code_good =`
+@group(0)@binding(0) var < storage,read_write > A: array <f32>;
+@binding(1) @group(0) var texBind: texture_2d<f32>;
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) g: u32) {
-  let opaqueDepth = textureLoad(opaqueDepthTexture, vec2(i32(g),i32(g)), 0);
-  A[g] = i32(opaqueDepth);
+  A[g] =  textureLoad(texBind, vec2(i32(g),i32(g)), 0).x;
 }`;
 
                 shader_code_bad = `
-@group(0)@binding(0) var < storage,read_write > A: array < i32 >;
+@group(0)@binding(0) var < storage,read_write > A: array < f32 >;
 
-@binding(1) @group(0) var opaqueDepthTexture: texture_depth_2d;
+@binding(1) @group(0) var texBind: texture_2d<f32>;
 
-fn myLoad(tex: texture_depth_2d, uv: vec2<i32>) -> f32 {
-  return textureLoad(tex, uv, 0);
+fn myLoad(tex: texture_2d<f32>, uv: vec2<i32>) -> f32 {
+  return textureLoad(tex, uv, 0).x;
 }
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) g: u32) {
-  let opaqueDepth = myLoad(opaqueDepthTexture, vec2(i32(g),i32(g)));
-  A[g] = i32(opaqueDepth);
+  A[g] = myLoad(texBind, vec2(i32(g),i32(g)));
 }`;
 
         var use_hoist= document.getElementById('usehoist').checked ;
