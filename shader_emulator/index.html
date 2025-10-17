@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU Ubershader Benchmark (tanh, sqrt)</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+        #container {
+            max-width: 800px;
+            width: 100%;
+            padding: 2rem;
+            background-color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        h1, h2 {
+            color: #1a1a1a;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 8px;
+        }
+        p {
+            line-height: 1.6;
+        }
+        .info-box {
+            padding: 0.75rem 1.25rem;
+            margin-bottom: 1rem;
+            border: 1px solid transparent;
+            border-radius: .25rem;
+            color: #0c5460;
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+        }
+        button {
+            display: block;
+            width: 100%;
+            padding: 14px 28px;
+            font-size: 18px;
+            cursor: pointer;
+            border: none;
+            background-color: #007aff;
+            color: white;
+            border-radius: 6px;
+            transition: background-color 0.2s;
+            margin: 1.5rem 0;
+        }
+        button:disabled {
+            background-color: #999;
+            cursor: not-allowed;
+        }
+        button:hover:enabled {
+            background-color: #0056b3;
+        }
+        #results {
+            margin-top: 1rem;
+            padding: 1rem;
+            background-color: #eef;
+            border-left: 4px solid #007aff;
+            white-space: pre-wrap;
+            font-family: "SF Mono", "Consolas", "Menlo", monospace;
+            font-size: 14px;
+        }
+        .shader-display-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        @media (min-width: 768px) {
+            .shader-display-container {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        .shader-box {
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .shader-box h3 {
+            margin: 0;
+            padding: 0.75rem 1rem;
+            background-color: #f7f7f7;
+            border-bottom: 1px solid #ccc;
+            font-size: 16px;
+        }
+        .shader-box pre {
+            margin: 0;
+            background-color: #2d2d2d;
+            color: #f1f1f1;
+            padding: 1rem;
+            font-size: 13px;
+            overflow-x: auto;
+            max-height: 350px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="container">
+        <h1>WebGPU Ubershader Benchmark</h1>
+        <p>This page compares a native vs. emulated shader performing **200 operations** (`tanh` and `sqrt(abs(x))`) on 10 million data elements.</p>
+        
+        <div class="info-box">
+            The instruction set has been focused on `tanh` and `sqrt(abs(x))` to analyze the ubershader overhead with moderately complex functions.
+        </div>
+        
+        <button id="startButton">Start Benchmark</button>
+        
+        <div id="results">Awaiting benchmark results...</div>
+
+        <h2>Shader Source Code</h2>
+        <div class="shader-display-container">
+            <div class="shader-box">
+                <h3>Native Shader (2 Ops)</h3>
+                <pre><code id="native-shader-code"></code></pre>
+            </div>
+            <div class="shader-box">
+                <h3>Ubershader (2 Ops)</h3>
+                <pre><code id="uber-shader-code"></code></pre>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- Shader Definitions ---
+
+        const nativeShaderCode = `
+struct Params {
+    grid_width: u32,
+};
+@group(0) @binding(0) var<storage, read_write> data: array<f32>;
+@group(0) @binding(1) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.y * params.grid_width + global_id.x;
+    if (index >= arrayLength(&data)) {
+        return;
+    }
+    var value = data[index];
+
+    // 200 hardcoded unary operations (100 iterations * 2 ops)
+    for (var i = 0u; i < 100u; i = i + 1u) {
+        value = tanh(value);
+        value = sqrt(abs(value));
+    }
+
+    data[index] = value;
+}`.trim();
+
+        const ubershaderCode = `
+struct Params {
+    grid_width: u32,
+};
+@group(0) @binding(0) var<storage, read_write> data: array<f32>;
+@group(0) @binding(1) var<storage, read> instructions: array<u32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+const TANH_OP = 0u;
+const SQRT_ABS_OP = 1u;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.y * params.grid_width + global_id.x;
+    if (index >= arrayLength(&data)) {
+        return;
+    }
+    var value = data[index];
+
+    // 200 emulated unary operations
+    for (var i = 0u; i < 200u; i = i + 1u) {
+        let instruction = instructions[i];
+        switch instruction {
+            case TANH_OP: { value = tanh(value); }
+            case SQRT_ABS_OP: { value = sqrt(abs(value)); }
+            default: {}
+        }
+    }
+
+    data[index] = value;
+}`.trim();
+
+        function displayShaderCode() {
+            document.getElementById('native-shader-code').textContent = nativeShaderCode;
+            document.getElementById('uber-shader-code').textContent = ubershaderCode;
+        }
+
+        async function main() {
+            const startButton = document.getElementById('startButton');
+            const resultsDiv = document.getElementById('results');
+
+            displayShaderCode();
+
+            if (!navigator.gpu) {
+                resultsDiv.textContent = "WebGPU not supported on this browser.";
+                startButton.disabled = true;
+                return;
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                resultsDiv.textContent = "Failed to get GPU adapter.";
+                startButton.disabled = true;
+                return;
+            }
+
+            // --- PARAMETERS ---
+            const NUM_ELEMENTS = 10_000_000;
+            const NUM_OPERATIONS = 200; // Changed to 200 for 2 operations
+            const WARMUP_RUNS = 5;
+            const BENCHMARK_RUNS = 100;
+            const WORKGROUP_SIZE = 256;
+
+            // --- Device Request with Higher Limits ---
+            const requiredBufferSize = NUM_ELEMENTS * Float32Array.BYTES_PER_ELEMENT;
+
+            if (requiredBufferSize > adapter.limits.maxStorageBufferBindingSize) {
+                resultsDiv.textContent = `Error: Required buffer size (${requiredBufferSize.toLocaleString()} bytes) exceeds this GPU's limit (${adapter.limits.maxStorageBufferBindingSize.toLocaleString()} bytes).`;
+                startButton.disabled = true;
+                return;
+            }
+
+            const device = await adapter.requestDevice({
+                requiredLimits: {
+                    maxStorageBufferBindingSize: requiredBufferSize
+                }
+            });
+
+
+            // --- Calculate 2D Dispatch Dimensions ---
+            const totalWorkgroups = Math.ceil(NUM_ELEMENTS / WORKGROUP_SIZE);
+            const maxDim = device.limits.maxComputeWorkgroupsPerDimension;
+            
+            let dispatchX, dispatchY;
+            if (totalWorkgroups <= maxDim) {
+                dispatchX = totalWorkgroups;
+                dispatchY = 1;
+            } else {
+                dispatchY = Math.ceil(Math.sqrt(totalWorkgroups));
+                dispatchX = Math.ceil(totalWorkgroups / dispatchY);
+            }
+            
+            if (dispatchX > maxDim || dispatchY > maxDim) {
+                 resultsDiv.textContent = `Error: Calculated dispatch dimensions (${dispatchX}, ${dispatchY}) exceed GPU limits.`;
+                 startButton.disabled = true;
+                 return;
+            }
+
+            const gridWidthInThreads = dispatchX * WORKGROUP_SIZE;
+
+
+            // --- Data and Buffer Preparation ---
+            const initialData = new Float32Array(NUM_ELEMENTS);
+            for (let i = 0; i < NUM_ELEMENTS; i++) {
+                initialData[i] = Math.random() * 2 - 1; // Use negative numbers again
+            }
+
+            const instructions = new Uint32Array(NUM_OPERATIONS);
+            for (let i = 0; i < NUM_OPERATIONS; i++) {
+                instructions[i] = i % 2; // Cycle through 2 operations
+            }
+
+            const dataBuffer = device.createBuffer({
+                size: requiredBufferSize,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            });
+            
+            const instructionBuffer = device.createBuffer({
+                size: instructions.byteLength,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            });
+            device.queue.writeBuffer(instructionBuffer, 0, instructions);
+            
+            const paramsBuffer = device.createBuffer({
+                size: Uint32Array.BYTES_PER_ELEMENT,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([gridWidthInThreads]));
+
+
+            // --- Pipeline and Bind Group Setup ---
+            const nativeShaderModule = device.createShaderModule({ code: nativeShaderCode });
+            const ubershaderModule = device.createShaderModule({ code: ubershaderCode });
+
+            const nativePipeline = device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: nativeShaderModule, entryPoint: 'main' },
+            });
+            
+            const ubershaderPipeline = device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: ubershaderModule, entryPoint: 'main' },
+            });
+
+            const nativeBindGroup = device.createBindGroup({
+                layout: nativePipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: dataBuffer } },
+                    { binding: 1, resource: { buffer: paramsBuffer } },
+                ],
+            });
+
+            const ubershaderBindGroup = device.createBindGroup({
+                layout: ubershaderPipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: dataBuffer } },
+                    { binding: 1, resource: { buffer: instructionBuffer } },
+                    { binding: 2, resource: { buffer: paramsBuffer } },
+                ],
+            });
+
+            // --- Benchmarking Logic ---
+            async function runTest(pipeline, bindGroup) {
+                const commandEncoder = device.createCommandEncoder();
+                const passEncoder = commandEncoder.beginComputePass();
+                passEncoder.setPipeline(pipeline);
+                passEncoder.setBindGroup(0, bindGroup);
+                passEncoder.dispatchWorkgroups(dispatchX, dispatchY);
+                passEncoder.end();
+                device.queue.submit([commandEncoder.finish()]);
+                await device.queue.onSubmittedWorkDone();
+            }
+            
+            async function runBenchmark(shaderName, pipeline, bindGroup) {
+                device.queue.writeBuffer(dataBuffer, 0, initialData);
+                await device.queue.onSubmittedWorkDone();
+
+                resultsDiv.textContent = `Warming up ${shaderName}...`;
+                for (let i = 0; i < WARMUP_RUNS; i++) {
+                    await runTest(pipeline, bindGroup);
+                }
+                
+                let totalTime = 0;
+                resultsDiv.textContent = `Running ${shaderName} benchmark (${BENCHMARK_RUNS} runs)...`;
+                for (let i = 0; i < BENCHMARK_RUNS; i++) {
+                    const startTime = performance.now();
+                    await runTest(pipeline, bindGroup);
+                    const endTime = performance.now();
+                    totalTime += (endTime - startTime);
+                }
+                return totalTime / BENCHMARK_RUNS;
+            }
+
+            // --- UI Interaction ---
+            startButton.disabled = false;
+            resultsDiv.textContent = 'Ready to start benchmark.';
+
+            startButton.onclick = async () => {
+                startButton.disabled = true;
+                resultsDiv.textContent = 'Starting benchmark...';
+
+                const nativeTime = await runBenchmark("Native Shader", nativePipeline, nativeBindGroup);
+                const ubershaderTime = await runBenchmark("Ubershader", ubershaderPipeline, ubershaderBindGroup);
+
+                const overhead = ubershaderTime - nativeTime;
+                const overheadPercent = (overhead / nativeTime) * 100;
+                
+                const resultText = `
+Benchmark Complete!
+
+Parameters:
+- Shader Operations:    ${NUM_OPERATIONS}
+- Data Elements:        ${NUM_ELEMENTS.toLocaleString()}
+- Dispatch Grid:        ${dispatchX} x ${dispatchY} workgroups
+
+Results (Averaged):
+- Native Shader Time:   ${nativeTime.toFixed(4)} ms
+- Ubershader Time:      ${ubershaderTime.toFixed(4)} ms
+
+Analysis:
+- Overhead:             ${overhead.toFixed(4)} ms
+- Performance Cost:     ${overheadPercent.toFixed(2)}% slower
+
+The ubershader is ${overheadPercent.toFixed(2)}% slower on this device.`;
+                
+                resultsDiv.textContent = resultText;
+                startButton.disabled = false;
+            };
+        }
+
+        main().catch(e => {
+            console.error(e);
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.textContent = `An error occurred: ${e.message}`;
+            resultsDiv.style.backgroundColor = '#f8d7da';
+            resultsDiv.style.borderColor = '#f5c6cb';
+            resultsDiv.style.color = '#721c24';
+            document.getElementById('startButton').disabled = true;
+        });
+
+    </script>
+</body>
+</html>
