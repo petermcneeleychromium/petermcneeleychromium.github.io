@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGPU Ubershader Benchmark (tanh, sqrt)</title>
+    <title>WebGPU Ubershader Benchmark (Packed Instructions)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -98,7 +98,7 @@
             padding: 1rem;
             font-size: 13px;
             overflow-x: auto;
-            max-height: 350px;
+            max-height: 400px;
         }
     </style>
 </head>
@@ -106,10 +106,10 @@
 
     <div id="container">
         <h1>WebGPU Ubershader Benchmark</h1>
-        <p>This page compares a native vs. emulated shader performing **200 operations** (`tanh` and `sqrt(abs(x))`) on 10 million data elements.</p>
+        <p>This page compares a native vs. emulated shader performing **200 operations** (`tanh` and `sqrt(abs(x))`).</p>
         
         <div class="info-box">
-            The instruction set has been focused on `tanh` and `sqrt(abs(x))` to analyze the ubershader overhead with moderately complex functions.
+            <strong>New Hypothesis:</strong> This version tests if memory reads are the main bottleneck. The ubershader now reads a single `u32` and decodes **32 instructions** from its bits, drastically reducing memory access.
         </div>
         
         <button id="startButton">Start Benchmark</button>
@@ -119,11 +119,11 @@
         <h2>Shader Source Code</h2>
         <div class="shader-display-container">
             <div class="shader-box">
-                <h3>Native Shader (2 Ops)</h3>
+                <h3>Native Shader</h3>
                 <pre><code id="native-shader-code"></code></pre>
             </div>
             <div class="shader-box">
-                <h3>Ubershader (2 Ops)</h3>
+                <h3>Ubershader (Packed)</h3>
                 <pre><code id="uber-shader-code"></code></pre>
             </div>
         </div>
@@ -166,6 +166,7 @@ struct Params {
 
 const TANH_OP = 0u;
 const SQRT_ABS_OP = 1u;
+const NUM_OPERATIONS = 200u;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -175,13 +176,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     var value = data[index];
 
-    // 200 emulated unary operations
-    for (var i = 0u; i < 200u; i = i + 1u) {
-        let instruction = instructions[i];
-        switch instruction {
-            case TANH_OP: { value = tanh(value); }
-            case SQRT_ABS_OP: { value = sqrt(abs(value)); }
-            default: {}
+    // Loop through all operations, 32 at a time
+    for (var i = 0u; i < NUM_OPERATIONS; i = i + 32u) {
+        let packed_index = i / 32u;
+        let packed_instr = instructions[packed_index];
+
+        // Inner loop to decode the 32 bits of the packed instruction
+        for (var j = 0u; j < 32u; j = j + 1u) {
+            // Ensure we don't run more than NUM_OPERATIONS
+            if (i + j >= NUM_OPERATIONS) {
+                break;
+            }
+
+            let instr_bit = (packed_instr >> j) & 1u;
+            switch instr_bit {
+                case TANH_OP: { value = tanh(value); }
+                case SQRT_ABS_OP: { value = sqrt(abs(value)); }
+                default: {} // Should not happen with bits
+            }
         }
     }
 
@@ -214,7 +226,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             // --- PARAMETERS ---
             const NUM_ELEMENTS = 10_000_000;
-            const NUM_OPERATIONS = 200; // Changed to 200 for 2 operations
+            const NUM_OPERATIONS = 200;
             const WARMUP_RUNS = 5;
             const BENCHMARK_RUNS = 100;
             const WORKGROUP_SIZE = 256;
@@ -223,49 +235,47 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             const requiredBufferSize = NUM_ELEMENTS * Float32Array.BYTES_PER_ELEMENT;
 
             if (requiredBufferSize > adapter.limits.maxStorageBufferBindingSize) {
-                resultsDiv.textContent = `Error: Required buffer size (${requiredBufferSize.toLocaleString()} bytes) exceeds this GPU's limit (${adapter.limits.maxStorageBufferBindingSize.toLocaleString()} bytes).`;
+                resultsDiv.textContent = `Error: Required buffer size exceeds this GPU's limit.`;
                 startButton.disabled = true;
                 return;
             }
 
             const device = await adapter.requestDevice({
-                requiredLimits: {
-                    maxStorageBufferBindingSize: requiredBufferSize
-                }
+                requiredLimits: { maxStorageBufferBindingSize: requiredBufferSize }
             });
-
 
             // --- Calculate 2D Dispatch Dimensions ---
             const totalWorkgroups = Math.ceil(NUM_ELEMENTS / WORKGROUP_SIZE);
             const maxDim = device.limits.maxComputeWorkgroupsPerDimension;
-            
-            let dispatchX, dispatchY;
-            if (totalWorkgroups <= maxDim) {
-                dispatchX = totalWorkgroups;
-                dispatchY = 1;
-            } else {
+            let dispatchX = totalWorkgroups, dispatchY = 1;
+            if (totalWorkgroups > maxDim) {
                 dispatchY = Math.ceil(Math.sqrt(totalWorkgroups));
                 dispatchX = Math.ceil(totalWorkgroups / dispatchY);
             }
-            
             if (dispatchX > maxDim || dispatchY > maxDim) {
-                 resultsDiv.textContent = `Error: Calculated dispatch dimensions (${dispatchX}, ${dispatchY}) exceed GPU limits.`;
+                 resultsDiv.textContent = `Error: Calculated dispatch dimensions exceed GPU limits.`;
                  startButton.disabled = true;
                  return;
             }
-
             const gridWidthInThreads = dispatchX * WORKGROUP_SIZE;
 
 
             // --- Data and Buffer Preparation ---
             const initialData = new Float32Array(NUM_ELEMENTS);
             for (let i = 0; i < NUM_ELEMENTS; i++) {
-                initialData[i] = Math.random() * 2 - 1; // Use negative numbers again
+                initialData[i] = Math.random() * 2 - 1;
             }
 
-            const instructions = new Uint32Array(NUM_OPERATIONS);
+            // --- NEW: Pack Instructions into bits ---
+            const numPackedU32s = Math.ceil(NUM_OPERATIONS / 32);
+            const packedInstructions = new Uint32Array(numPackedU32s);
             for (let i = 0; i < NUM_OPERATIONS; i++) {
-                instructions[i] = i % 2; // Cycle through 2 operations
+                const instruction = i % 2; // 0 for tanh, 1 for sqrt(abs(x))
+                const packedIndex = Math.floor(i / 32);
+                const bitPosition = i % 32;
+                if (instruction === 1) {
+                    packedInstructions[packedIndex] |= (1 << bitPosition);
+                }
             }
 
             const dataBuffer = device.createBuffer({
@@ -273,11 +283,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
             });
             
+            // Use the new, much smaller packed instruction buffer
             const instructionBuffer = device.createBuffer({
-                size: instructions.byteLength,
+                size: packedInstructions.byteLength,
                 usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
             });
-            device.queue.writeBuffer(instructionBuffer, 0, instructions);
+            device.queue.writeBuffer(instructionBuffer, 0, packedInstructions);
             
             const paramsBuffer = device.createBuffer({
                 size: Uint32Array.BYTES_PER_ELEMENT,
