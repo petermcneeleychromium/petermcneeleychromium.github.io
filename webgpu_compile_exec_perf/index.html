@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU Benchmark (2-Pass)</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #eeeeee;
+            font-family: sans-serif;
+            margin: 20px;
+            height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        h1 { font-size: 1.2rem; margin: 0; }
+        
+        #status { font-family: monospace; font-size: 0.9rem; color: #aaa; }
+
+        /* Main Split Layout */
+        main {
+            display: flex;
+            gap: 20px;
+            flex: 1;
+            min-height: 0; /* Required for scrolling inside flex items */
+        }
+
+        section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        /* Inputs & Editor */
+        textarea {
+            flex: 1;
+            background-color: #000;
+            color: #dcdcdc;
+            border: 1px solid #444;
+            padding: 10px;
+            font-family: monospace;
+            resize: none;
+        }
+
+        .controls {
+            padding: 10px;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .input-group { display: flex; align-items: center; gap: 5px; }
+        label { font-size: 0.85rem; color: #ccc; }
+        input[type="number"] { background: #111; border: 1px solid #555; color: white; padding: 5px; width: 100px;}
+        input[type="checkbox"] { transform: scale(1.2); }
+        button { cursor: pointer; padding: 5px 15px; background-color: #3b82f6; color: white; border: none; font-weight: bold; border-radius: 3px; }
+        button:hover { background-color: #2563eb; }
+        button:disabled { background-color: #555; }
+
+        /* Logs */
+        #console-output {
+            flex: 1;
+            background-color: #000;
+            border: 1px solid #444;
+            padding: 10px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #333; }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+        .info { color: #60a5fa; }
+        .warn { color: #facc15; }
+        .highlight { font-weight: bold; color: #fff; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div>
+            <h1>WebGPU Benchmark</h1>
+            <small>Compile + Delay + 3x Executions</small>
+        </div>
+        <div id="status">Initializing...</div>
+    </header>
+
+    <main>
+        <!-- LEFT: Editor -->
+        <section>
+            <textarea id="shader-code" spellcheck="false">
+@group(0) @binding(0) var<storage, read> inputData : array<f32>;
+@group(0) @binding(1) var<storage, read_write> outputData : array<f32>;
+
+// Updated to workgroup_size(256) to fit 16M elements within the 
+// WebGPU dispatch limit (65535 groups).
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
+    let index = global_id.x;
+    
+    // Safety check for array bounds
+    if (index >= arrayLength(&inputData)) {
+        return;
+    }
+
+    // --- WORKLOAD START ---
+    var val = inputData[index];
+    for(var i = 0; i < 100; i++) {
+        val = sqrt(val + 1.0) * 1.6;
+    }
+    outputData[index] = sqrt(val) + 1.0;
+    // --- WORKLOAD END ---
+}
+            </textarea>
+
+            <div class="controls">
+                <div class="input-group">
+                    <label>Count:</label>
+                    <input type="number" id="data-size" value="16000000" min="1">
+                </div>
+                <div class="input-group">
+                    <input type="checkbox" id="use-delay" checked>
+                    <label for="use-delay">Add 1s Delay</label>
+                </div>
+                <button onclick="runBenchmark()" id="run-btn" style="margin-left:auto;">Run Benchmark</button>
+            </div>
+        </section>
+
+        <!-- RIGHT: Logs -->
+        <section>
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                <strong>Logs</strong>
+                <a href="#" onclick="clearLog(); return false;" style="color:#888;">Clear</a>
+            </div>
+            <div id="console-output"></div>
+        </section>
+    </main>
+
+    <script>
+        let device = null;
+        let adapter = null;
+        let hasTimestampQuery = false;
+
+        const statusDiv = document.getElementById('status');
+        const runBtn = document.getElementById('run-btn');
+        const consoleOutput = document.getElementById('console-output');
+
+        // --- Logging Utility ---
+        function log(msg, type = '') {
+            const div = document.createElement('div');
+            div.className = 'log-entry ' + type;
+            const time = new Date().toLocaleTimeString().split(' ')[0];
+            div.innerHTML = `[${time}] ${msg}`;
+            consoleOutput.appendChild(div);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        function clearLog() {
+            consoleOutput.innerHTML = '';
+        }
+
+        // --- Initialization ---
+        async function initWebGPU() {
+            if (!navigator.gpu) {
+                statusDiv.innerText = "WebGPU Not Supported";
+                statusDiv.style.color = "red";
+                runBtn.disabled = true;
+                log("WebGPU is not available in this browser.", "error");
+                return;
+            }
+
+            try {
+                adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) throw new Error("No Adapter found");
+
+                const features = [];
+                if (adapter.features.has('timestamp-query')) {
+                    features.push('timestamp-query');
+                    hasTimestampQuery = true;
+                }
+
+                device = await adapter.requestDevice({ requiredFeatures: features });
+
+                statusDiv.innerText = hasTimestampQuery ? "Ready (GPU Timer)" : "Ready (CPU Timer)";
+                statusDiv.style.color = hasTimestampQuery ? "#4ade80" : "#60a5fa";
+
+                log(`Initialized: ${adapter.info.architecture || 'Generic Adapter'}`, "success");
+
+            } catch (e) {
+                statusDiv.innerText = "Init Failed";
+                statusDiv.style.color = "red";
+                log(e.message, "error");
+                runBtn.disabled = true;
+            }
+        }
+
+        async function executePass(pipeline, bindGroup, dataSize, passLabel) {
+            const encoder = device.createCommandEncoder();
+            
+            let querySet, resolveBuffer;
+            if (hasTimestampQuery) {
+                querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+                resolveBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+            }
+
+            device.pushErrorScope('validation');
+
+            const pass = encoder.beginComputePass({
+                timestampWrites: hasTimestampQuery ? {
+                    querySet: querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1
+                } : undefined
+            });
+            
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, bindGroup);
+            
+            const workgroupSize = 256; 
+            const dispatchCount = Math.ceil(dataSize / workgroupSize);
+            
+            // Limit Check
+            const maxGroups = device.limits.maxComputeWorkgroupsPerDimension;
+            if (dispatchCount > maxGroups) {
+                pass.end();
+                throw new Error(`Dispatch limit exceeded (${dispatchCount} > ${maxGroups}). Increase shader workgroup_size.`);
+            }
+
+            pass.dispatchWorkgroups(dispatchCount);
+            pass.end();
+
+            if (hasTimestampQuery) {
+                encoder.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
+            }
+
+            const validationError = await device.popErrorScope();
+            if (validationError) throw new Error(`Validation Error: ${validationError.message}`);
+
+            let resultBuffer;
+            if (hasTimestampQuery) {
+                resultBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+                encoder.copyBufferToBuffer(resolveBuffer, 0, resultBuffer, 0, 16);
+            }
+
+            const cmdBuf = encoder.finish();
+            
+            let execTime = 0;
+            if (hasTimestampQuery) {
+                device.queue.submit([cmdBuf]);
+                await resultBuffer.mapAsync(GPUMapMode.READ);
+                const times = new BigInt64Array(resultBuffer.getMappedRange());
+                execTime = Number(times[1] - times[0]) / 1e6;
+                resultBuffer.unmap();
+            } else {
+                const start = performance.now();
+                device.queue.submit([cmdBuf]);
+                await device.queue.onSubmittedWorkDone();
+                execTime = performance.now() - start;
+            }
+            return execTime;
+        }
+
+        // --- Benchmark Logic ---
+        async function runBenchmark() {
+            if (!device) return;
+
+            runBtn.disabled = true;
+            const originalText = runBtn.innerText;
+            runBtn.innerText = "Running...";
+            
+            const shaderCode = document.getElementById('shader-code').value;
+            let dataSize = parseInt(document.getElementById('data-size').value) || 1000;
+            const useDelay = document.getElementById('use-delay').checked;
+
+            // Clamp size
+            const maxElements = Math.floor(device.limits.maxStorageBufferBindingSize / 4);
+            if (dataSize > maxElements) {
+                log(`Clamped size to ${maxElements.toLocaleString()}`, "info");
+                dataSize = maxElements;
+                document.getElementById('data-size').value = dataSize;
+            }
+
+            try {
+                // 1. Compilation
+                log(`Compiling shader...`);
+                const tCompileStart = performance.now();
+                const shaderModule = device.createShaderModule({ code: shaderCode });
+                
+                const info = await shaderModule.getCompilationInfo();
+                if (info.messages.some(m => m.type === 'error')) throw new Error("Shader compilation failed");
+
+                const pipeline = await device.createComputePipelineAsync({
+                    layout: 'auto',
+                    compute: { module: shaderModule, entryPoint: 'main' }
+                });
+                const compileDuration = performance.now() - tCompileStart;
+                
+                // 2. Resources
+                const bufferSize = dataSize * 4;
+                const inputData = new Float32Array(dataSize).map(() => Math.random());
+                
+                const inputBuffer = device.createBuffer({
+                    size: bufferSize,
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                    mappedAtCreation: true
+                });
+                new Float32Array(inputBuffer.getMappedRange()).set(inputData);
+                inputBuffer.unmap();
+
+                const outputBuffer = device.createBuffer({
+                    size: bufferSize,
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+                });
+
+                const bindGroup = device.createBindGroup({
+                    layout: pipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: inputBuffer } },
+                        { binding: 1, resource: { buffer: outputBuffer } }
+                    ]
+                });
+
+                // 3. Optional Delay
+                if (useDelay) {
+                    log("Waiting 1s (Simulating background idle)...", "info");
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                // 4. Execution 1
+                log("Starting Run 1 (Cold)...");
+                const exec1 = await executePass(pipeline, bindGroup, dataSize, "Run 1");
+
+                // 5. Execution 2
+                log("Starting Run 2 (Warm)...");
+                const exec2 = await executePass(pipeline, bindGroup, dataSize, "Run 2");
+
+                // 6. Execution 3
+                log("Starting Run 3 (Warm)...");
+                const exec3 = await executePass(pipeline, bindGroup, dataSize, "Run 3");
+
+                // Report
+                const typeStr = hasTimestampQuery ? "(GPU)" : "(CPU)";
+                log("--------------------------------", "info");
+                log(`> Compile: <span class="highlight">${compileDuration.toFixed(2)} ms</span>`);
+                log(`> Run 1 ${typeStr}: <span class="highlight">${exec1.toFixed(4)} ms</span>`);
+                log(`> Run 2 ${typeStr}: <span class="highlight">${exec2.toFixed(4)} ms</span>`);
+                log(`> Run 3 ${typeStr}: <span class="highlight">${exec3.toFixed(4)} ms</span>`);
+                log("--------------------------------", "info");
+                log("Done.", "success");
+
+            } catch (e) {
+                log(e.message, "error");
+                console.error(e);
+            } finally {
+                runBtn.disabled = false;
+                runBtn.innerText = originalText;
+            }
+        }
+
+        initWebGPU();
+    </script>
+</body>
+</html>
