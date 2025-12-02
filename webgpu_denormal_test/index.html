@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU Denormal Float Test</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #eeeeee;
+            font-family: sans-serif;
+            margin: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        h1 { margin-bottom: 10px; }
+        
+        #status { 
+            font-family: monospace; 
+            font-size: 1.2rem; 
+            margin-bottom: 20px; 
+            padding: 10px;
+            border-radius: 5px;
+            background: #333;
+        }
+
+        .result-box {
+            background-color: #000;
+            border: 1px solid #444;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 600px;
+            text-align: center;
+        }
+
+        .value-display {
+            font-family: monospace;
+            font-size: 1.5rem;
+            margin: 10px 0;
+            color: #4ade80;
+        }
+
+        .hex-display {
+            font-family: monospace;
+            color: #aaa;
+            font-size: 1rem;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 10px 20px;
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            font-weight: bold;
+            border-radius: 5px;
+            font-size: 1rem;
+            margin-top: 20px;
+        }
+        button:hover { background-color: #2563eb; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        .supported { color: #4ade80; font-weight: bold; }
+        .unsupported { color: #f87171; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>WebGPU Denormal Test</h1>
+    <div id="status">Initializing WebGPU...</div>
+
+    <div class="result-box">
+        <p>This test divides the smallest normal float (approx 1.18e-38) by 10.0 in a compute shader.</p>
+        <p>If denormals are supported, the result should be approx 1.18e-39.</p>
+        <p>If flushed to zero, the result will be 0.</p>
+        
+        <div id="result-container" style="display:none;">
+            <div class="value-display" id="float-val"></div>
+            <div class="hex-display" id="hex-val"></div>
+            <h2 id="conclusion"></h2>
+        </div>
+
+        <button id="run-btn" onclick="runTest()" disabled>Run Test</button>
+    </div>
+
+    <script>
+        let device = null;
+        let adapter = null;
+
+        const statusDiv = document.getElementById('status');
+        const runBtn = document.getElementById('run-btn');
+        const resultContainer = document.getElementById('result-container');
+        const floatValDiv = document.getElementById('float-val');
+        const hexValDiv = document.getElementById('hex-val');
+        const conclusionDiv = document.getElementById('conclusion');
+
+        async function initWebGPU() {
+            if (!navigator.gpu) {
+                statusDiv.innerText = "WebGPU Not Supported";
+                statusDiv.style.color = "#f87171";
+                return;
+            }
+
+            try {
+                adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) throw new Error("No Adapter found");
+                
+                device = await adapter.requestDevice();
+                
+                statusDiv.innerText = `Ready: ${adapter.info.architecture || 'Generic Adapter'}`;
+                statusDiv.style.color = "#4ade80";
+                runBtn.disabled = false;
+
+            } catch (e) {
+                statusDiv.innerText = "Init Failed: " + e.message;
+                statusDiv.style.color = "#f87171";
+            }
+        }
+
+        async function runTest() {
+            if (!device) return;
+            
+            runBtn.disabled = true;
+            runBtn.innerText = "Running...";
+            resultContainer.style.display = 'none';
+
+            const shaderCode = `
+                @group(0) @binding(0) var<storage, read_write> output: f32;
+
+                @compute @workgroup_size(1)
+                fn main() {
+                    // Smallest normal float is approx 1.17549435e-38
+                    // We start with 1.0 and divide by 10 repeatedly to reach denormal range safely
+                    // 10^-38 is normal. 10^-39 is denormal.
+                    
+                    var val: f32 = 1.0;
+                    // Loop 40 times: 1.0 * 10^-40
+                    for (var i = 0u; i < 40u; i++) {
+                        val = val / 10.0;
+                    }
+                    output = val;
+                }
+            `;
+
+            try {
+                const shaderModule = device.createShaderModule({ code: shaderCode });
+                const pipeline = await device.createComputePipelineAsync({
+                    layout: 'auto',
+                    compute: { module: shaderModule, entryPoint: 'main' }
+                });
+
+                const outputBuffer = device.createBuffer({
+                    size: 4,
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+                });
+
+                const bindGroup = device.createBindGroup({
+                    layout: pipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: outputBuffer } }
+                    ]
+                });
+
+                const encoder = device.createCommandEncoder();
+                const pass = encoder.beginComputePass();
+                pass.setPipeline(pipeline);
+                pass.setBindGroup(0, bindGroup);
+                pass.dispatchWorkgroups(1);
+                pass.end();
+
+                // Readback
+                const readBuffer = device.createBuffer({
+                    size: 4,
+                    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+                });
+                encoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, 4);
+
+                device.queue.submit([encoder.finish()]);
+
+                await readBuffer.mapAsync(GPUMapMode.READ);
+                const arrayBuffer = readBuffer.getMappedRange();
+                const floatView = new Float32Array(arrayBuffer);
+                const uintView = new Uint32Array(arrayBuffer);
+                
+                const resultFloat = floatView[0];
+                const resultHex = '0x' + uintView[0].toString(16).padStart(8, '0').toUpperCase();
+                
+                readBuffer.unmap();
+
+                // Display
+                floatValDiv.innerText = resultFloat.toExponential(10);
+                hexValDiv.innerText = `Raw Hex: ${resultHex}`;
+                
+                if (resultFloat > 0 && resultFloat < 1.17549435e-38) {
+                    conclusionDiv.innerText = "✅ Denormals Supported";
+                    conclusionDiv.className = "supported";
+                } else if (resultFloat === 0) {
+                    conclusionDiv.innerText = "❌ Denormals Flushed to Zero";
+                    conclusionDiv.className = "unsupported";
+                } else {
+                    conclusionDiv.innerText = "❓ Unexpected Result (Maybe Normal?)";
+                    conclusionDiv.className = "warn";
+                }
+
+                resultContainer.style.display = 'block';
+
+            } catch (e) {
+                alert("Error: " + e.message);
+            } finally {
+                runBtn.disabled = false;
+                runBtn.innerText = "Run Test";
+            }
+        }
+
+        initWebGPU();
+    </script>
+</body>
+</html>
