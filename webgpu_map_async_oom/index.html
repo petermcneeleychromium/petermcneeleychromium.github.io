@@ -69,7 +69,23 @@
     
     <div class="controls">
         <p>This test attempts to <code>mapAsync</code> buffers of increasing size until failure to find the practical limit before an Out-Of-Memory (OOM) error occurs.</p>
-        <button id="start-btn" onclick="startTest()">Start Test</button>
+        
+        <div style="margin-bottom: 15px; display: flex; gap: 20px; align-items: center;">
+            <div>
+                <label for="max-mb-input" style="font-weight: bold; margin-right: 10px;">Max Size (MB):</label>
+                <input type="number" id="max-mb-input" placeholder="Auto" style="padding: 8px; border-radius: 4px; border: 1px solid #555; background: #333; color: white; width: 150px;">
+                <span id="max-mb-hint" style="color: #aaa; font-size: 0.9rem; margin-left: 10px;"></span>
+            </div>
+            <div>
+                <label for="repeats-input" style="font-weight: bold; margin-right: 10px;">Repeats:</label>
+                <input type="number" id="repeats-input" value="1" min="1" style="padding: 8px; border-radius: 4px; border: 1px solid #555; background: #333; color: white; width: 80px;">
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+            <button id="start-btn" onclick="startTest()">Start Test</button>
+            <button id="stop-btn" onclick="stopTest()" disabled style="background-color: #ef4444;">Stop Test</button>
+        </div>
         <div id="status" class="status-bar">Ready to start.</div>
     </div>
 
@@ -81,10 +97,13 @@
         let largestSuccessMB = 0;
         let errorOccurred = false;
         let isRunning = false;
+        let stopRequested = false;
 
         const statusDiv = document.getElementById('status');
         const logContainer = document.getElementById('log-container');
         const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const maxMbHint = document.getElementById('max-mb-hint');
 
         function log(msg, type = '') {
             const div = document.createElement('div');
@@ -94,10 +113,20 @@
             logContainer.scrollTop = logContainer.scrollHeight;
         }
 
+        function stopTest() {
+            if (isRunning) {
+                stopRequested = true;
+                log("Stopping test...", "info");
+                stopBtn.disabled = true;
+            }
+        }
+
         async function startTest() {
             if (isRunning) return;
             isRunning = true;
+            stopRequested = false;
             startBtn.disabled = true;
+            stopBtn.disabled = false;
             logContainer.innerHTML = '';
             largestSuccessMB = 0;
             errorOccurred = false;
@@ -105,6 +134,9 @@
             if (!navigator.gpu) {
                 log("WebGPU not supported", "error");
                 statusDiv.textContent = "Error: WebGPU not supported";
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                isRunning = false;
                 return;
             }
 
@@ -112,16 +144,37 @@
             if (!adapter) {
                 log("No GPU adapter found", "error");
                 statusDiv.textContent = "Error: No GPU adapter found";
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                isRunning = false;
                 return;
             }
 
             // Get the largest supported buffer size
             // Fallback to 4GB if not exposed, though usually it is.
             const maxBufferSize = adapter.limits.maxBufferSize || (2 ** 32); 
-            const maxMB = Math.floor(maxBufferSize / (1024 * 1024));
+            const hardwareMaxMB = Math.floor(maxBufferSize / (1024 * 1024));
+
+            maxMbHint.textContent = `(Detected Max: ${hardwareMaxMB} MB)`;
 
             log(`Adapter found: ${adapter.info.architecture || 'Generic'}`);
-            log(`Max Buffer Size Limit: ${maxMB} MB`);
+            log(`Hardware Max Buffer Size: ${hardwareMaxMB} MB`);
+
+            // Determine test limit
+            const maxInput = document.getElementById('max-mb-input');
+            const repeatsInput = document.getElementById('repeats-input');
+            
+            let userMax = parseInt(maxInput.value);
+            let limitMB = hardwareMaxMB;
+            let repeats = parseInt(repeatsInput.value) || 1;
+
+            if (!isNaN(userMax) && userMax > 0) {
+                limitMB = userMax;
+                log(`User specified limit: ${limitMB} MB`);
+            } else {
+                log(`Using hardware limit: ${limitMB} MB`);
+            }
+            log(`Repeats per size: ${repeats}`);
 
             let device;
             try {
@@ -133,6 +186,9 @@
             } catch (e) {
                 log(`Failed to request device with maxBufferSize: ${e.message}`, "error");
                 statusDiv.textContent = "Device creation failed.";
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                isRunning = false;
                 return;
             }
 
@@ -143,45 +199,57 @@
 
             log("Starting allocation loop...", "info");
 
-            for (let mb = startMB; mb <= maxMB; mb += stepMB) {
-                if (errorOccurred) break;
+            for (let mb = startMB; mb <= limitMB; mb += stepMB) {
+                if (errorOccurred || stopRequested) break;
 
-                statusDiv.textContent = `Testing size: ${mb} MB...`;
-                
                 // Ensure size is a multiple of 4 bytes
                 const size = Math.floor(mb * 1024 * 1024 / 4) * 4;
-                let buffer;
-                
-                try {
-                    buffer = device.createBuffer({
-                        size,
-                        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-                        mappedAtCreation: false,
-                    });
 
-                    await buffer.mapAsync(GPUMapMode.READ);
-                    buffer.unmap();
-                    buffer.destroy();
+                for (let i = 1; i <= repeats; i++) {
+                    if (errorOccurred || stopRequested) break;
+
+                    const runInfo = repeats > 1 ? ` (Run ${i}/${repeats})` : '';
+                    statusDiv.textContent = `Testing size: ${mb} MB${runInfo}...`;
                     
-                    largestSuccessMB = mb;
-                    log(`✅ Success: ${mb} MB`, "success");
+                    let buffer;
+                    try {
+                        buffer = device.createBuffer({
+                            size,
+                            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+                            mappedAtCreation: false,
+                        });
 
-                } catch (e) {
-                    log(`❌ Caught JS error at ${mb} MB: ${e.message}`, "error");
-                    errorOccurred = true; // Stop loop on JS error too
-                    break;
+                        await buffer.mapAsync(GPUMapMode.READ);
+                        buffer.unmap();
+                        buffer.destroy();
+                        
+                        largestSuccessMB = mb;
+                        log(`✅ Success: ${mb} MB${runInfo}`, "success");
+
+                    } catch (e) {
+                        log(`❌ Caught JS error at ${mb} MB${runInfo}: ${e.message}`, "error");
+                        errorOccurred = true; 
+                        break;
+                    }
+
+                    // Small delay to allow UI updates and GC breathing room
+                    await new Promise(resolve => setTimeout(resolve, 50));
                 }
-
-                // Small delay to allow UI updates and GC breathing room
-                await new Promise(resolve => setTimeout(resolve, 50));
             }
 
-            statusDiv.textContent = `Finished. Largest successful: ${largestSuccessMB} MB`;
+            if (stopRequested) {
+                statusDiv.textContent = `Stopped. Largest successful: ${largestSuccessMB} MB`;
+                log(`Test Stopped by user.`, "info");
+            } else {
+                statusDiv.textContent = `Finished. Largest successful: ${largestSuccessMB} MB`;
+                log(`Test Complete.`, "highlight");
+            }
+            
             log("------------------------------------------------", "info");
-            log(`Test Complete.`, "highlight");
             log(`Largest buffer successfully mapped: ${largestSuccessMB} MB`, "highlight");
             
             startBtn.disabled = false;
+            stopBtn.disabled = true;
             isRunning = false;
         }
     </script>
