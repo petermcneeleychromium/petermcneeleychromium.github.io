@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU mapAsync OOM Test</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #eeeeee;
+            font-family: sans-serif;
+            margin: 20px;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+
+        h1 { margin-bottom: 10px; }
+
+        .controls {
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            margin-bottom: 20px;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 10px 20px;
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            font-weight: bold;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+        button:hover { background-color: #2563eb; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        .status-bar {
+            font-family: monospace;
+            font-size: 1.1rem;
+            margin-top: 10px;
+            color: #aaa;
+        }
+
+        #log-container {
+            flex: 1;
+            background-color: #000;
+            border: 1px solid #444;
+            padding: 10px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9rem;
+            border-radius: 4px;
+        }
+
+        .log-entry { margin-bottom: 2px; }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+        .info { color: #60a5fa; }
+        .highlight { font-weight: bold; color: #fff; }
+    </style>
+</head>
+<body>
+
+    <h1>WebGPU mapAsync OOM Test</h1>
+    
+    <div class="controls">
+        <p>This test attempts to <code>mapAsync</code> buffers of increasing size until failure to find the practical limit before an Out-Of-Memory (OOM) error occurs.</p>
+        <button id="start-btn" onclick="startTest()">Start Test</button>
+        <div id="status" class="status-bar">Ready to start.</div>
+    </div>
+
+    <div id="log-container"></div>
+
+    <script>
+        const startMB = 1;
+        const stepMB = 1; // Can be increased to speed up testing
+        let largestSuccessMB = 0;
+        let errorOccurred = false;
+        let isRunning = false;
+
+        const statusDiv = document.getElementById('status');
+        const logContainer = document.getElementById('log-container');
+        const startBtn = document.getElementById('start-btn');
+
+        function log(msg, type = '') {
+            const div = document.createElement('div');
+            div.className = 'log-entry ' + type;
+            div.textContent = msg;
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        async function startTest() {
+            if (isRunning) return;
+            isRunning = true;
+            startBtn.disabled = true;
+            logContainer.innerHTML = '';
+            largestSuccessMB = 0;
+            errorOccurred = false;
+
+            if (!navigator.gpu) {
+                log("WebGPU not supported", "error");
+                statusDiv.textContent = "Error: WebGPU not supported";
+                return;
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                log("No GPU adapter found", "error");
+                statusDiv.textContent = "Error: No GPU adapter found";
+                return;
+            }
+
+            // Get the largest supported buffer size
+            // Fallback to 4GB if not exposed, though usually it is.
+            const maxBufferSize = adapter.limits.maxBufferSize || (2 ** 32); 
+            const maxMB = Math.floor(maxBufferSize / (1024 * 1024));
+
+            log(`Adapter found: ${adapter.info.architecture || 'Generic'}`);
+            log(`Max Buffer Size Limit: ${maxMB} MB`);
+
+            let device;
+            try {
+                device = await adapter.requestDevice({
+                    requiredLimits: {
+                        maxBufferSize: maxBufferSize,
+                    },
+                });
+            } catch (e) {
+                log(`Failed to request device with maxBufferSize: ${e.message}`, "error");
+                statusDiv.textContent = "Device creation failed.";
+                return;
+            }
+
+            device.addEventListener('uncapturederror', (event) => {
+                errorOccurred = true;
+                log(`WebGPU Uncaptured Error: ${event.error.message}`, "error");
+            });
+
+            log("Starting allocation loop...", "info");
+
+            for (let mb = startMB; mb <= maxMB; mb += stepMB) {
+                if (errorOccurred) break;
+
+                statusDiv.textContent = `Testing size: ${mb} MB...`;
+                
+                // Ensure size is a multiple of 4 bytes
+                const size = Math.floor(mb * 1024 * 1024 / 4) * 4;
+                let buffer;
+                
+                try {
+                    buffer = device.createBuffer({
+                        size,
+                        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+                        mappedAtCreation: false,
+                    });
+
+                    await buffer.mapAsync(GPUMapMode.READ);
+                    buffer.unmap();
+                    buffer.destroy();
+                    
+                    largestSuccessMB = mb;
+                    log(`✅ Success: ${mb} MB`, "success");
+
+                } catch (e) {
+                    log(`❌ Caught JS error at ${mb} MB: ${e.message}`, "error");
+                    errorOccurred = true; // Stop loop on JS error too
+                    break;
+                }
+
+                // Small delay to allow UI updates and GC breathing room
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+
+            statusDiv.textContent = `Finished. Largest successful: ${largestSuccessMB} MB`;
+            log("------------------------------------------------", "info");
+            log(`Test Complete.`, "highlight");
+            log(`Largest buffer successfully mapped: ${largestSuccessMB} MB`, "highlight");
+            
+            startBtn.disabled = false;
+            isRunning = false;
+        }
+    </script>
+</body>
+</html>
