@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGPU Shadow Gather vs Sample</title>
+    <title>WebGPU Dynamic Shadow Resolution</title>
     <style>
         body { margin: 0; overflow: hidden; background: #222; font-family: sans-serif; }
         canvas { display: block; width: 100vw; height: 100vh; }
@@ -19,24 +19,35 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
+            min-width: 200px;
         }
+        .row { display: flex; justify-content: space-between; align-items: center; }
         button {
-            padding: 10px 20px;
+            padding: 8px 12px;
             font-size: 14px;
             cursor: pointer;
             background: #444;
             color: white;
             border: 1px solid #666;
             border-radius: 4px;
+            width: 100%;
         }
         button:hover { background: #666; }
         .active { background: #007bff; border-color: #0056b3; }
+        label { font-size: 14px; color: #ccc; margin-bottom: 4px; display:block;}
     </style>
 </head>
 <body>
     <div id="controls">
-        <div id="status">Mode: Sample (PCF)</div>
-        <button id="toggleBtn">Switch to Gather</button>
+        <div>
+            <label>Filter Mode</label>
+            <button id="modeBtn">Mode: Sample (PCF)</button>
+        </div>
+        <hr style="width:100%; border-color:#555;">
+        <div>
+            <label>Shadow Resolution</label>
+            <button id="resBtn">Size: 64x64</button>
+        </div>
     </div>
     <canvas id="gpuCanvas"></canvas>
 
@@ -50,16 +61,13 @@
         const context = canvas.getContext('webgpu');
         const format = navigator.gpu.getPreferredCanvasFormat();
         
-        // UPDATED: Resolution set to 64x64
-        const shadowDepthTextureSize = 64; 
-
-        // --- 2. Shader Code (WGSL) ---
+        // --- 2. Shader Code ---
         const shaderCode = `
             struct Uniforms {
                 modelViewProjectionMatrix : mat4x4<f32>,
                 lightViewProjectionMatrix : mat4x4<f32>,
                 modelMatrix : mat4x4<f32>,
-                mode : f32, // 0.0 = Sample, 1.0 = Gather
+                mode : f32, 
             }
             @binding(0) @group(0) var<uniform> uniforms : Uniforms;
             @binding(1) @group(0) var shadowMap: texture_depth_2d;
@@ -84,54 +92,41 @@
                 output.vUV = input.uv;
 
                 let posFromLight = uniforms.lightViewProjectionMatrix * worldPos;
-                
-                // Convert to UV space
                 output.shadowPos = vec3<f32>(
                     posFromLight.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5),
                     posFromLight.z
                 );
-
                 return output;
             }
 
             @fragment
             fn fs_main(@location(0) vUV : vec2<f32>, @location(1) shadowPos : vec3<f32>) -> @location(0) vec4<f32> {
                 var visibility = 0.0;
-                let bias = 0.02; // Adjusted for 64x64
+                // Bias helps reduce acne, though usually needs tuning per resolution
+                let bias = 0.02; 
 
-                // Check bounds
                 if (shadowPos.z >= 0.0 && shadowPos.z <= 1.0 &&
                     shadowPos.x >= 0.0 && shadowPos.x <= 1.0 &&
                     shadowPos.y >= 0.0 && shadowPos.y <= 1.0) {
                     
                     if (uniforms.mode < 0.5) {
-                        // MODE 0: Standard Sample (Hardware PCF/Bilinear)
+                        // Sample (PCF)
                         visibility = textureSampleCompareLevel(
-                            shadowMap, 
-                            shadowSampler, 
-                            shadowPos.xy, 
-                            shadowPos.z - bias 
+                            shadowMap, shadowSampler, shadowPos.xy, shadowPos.z - bias 
                         );
                     } else {
-                        // MODE 1: Texture Gather (Manual Box Filter)
-                        // Returns vec4 with comparison results for the 4 nearest texels
+                        // Gather (Manual)
                         let temp = textureGatherCompare(
-                            shadowMap, 
-                            shadowSampler, 
-                            shadowPos.xy, 
-                            shadowPos.z - bias
+                            shadowMap, shadowSampler, shadowPos.xy, shadowPos.z - bias
                         );
-                        // Average the 4 results (0.25 weight each)
                         visibility = dot(temp, vec4<f32>(0.25));
                     }
-
                 } else {
                     visibility = 1.0; 
                 }
 
                 let color = vec3<f32>(vUV.x, vUV.y, 1.0);
                 let lighting = 0.3 + (visibility * 0.7);
-
                 return vec4<f32>(color * lighting, 1.0);
             }
         `;
@@ -156,7 +151,6 @@
             -2.0, 0.0,  2.0,  0.0, 1.0,
              2.0, 0.0, -2.0,  1.0, 0.0,
              2.0, 0.0,  2.0,  1.0, 1.0,
-
             // TRIANGLE
              0.0, 1.5,  0.0,  0.5, 1.0,
             -0.5, 0.5,  0.5,  0.0, 0.0,
@@ -169,20 +163,7 @@
         });
         device.queue.writeBuffer(vertexBuffer, 0, vertices);
 
-        // --- 4. Resources ---
-        const shadowDepthTexture = device.createTexture({
-            size: [shadowDepthTextureSize, shadowDepthTextureSize, 1],
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-            format: 'depth32float',
-        });
-
-        const shadowSampler = device.createSampler({
-            compare: 'less', 
-            magFilter: 'linear', 
-            minFilter: 'linear',
-        });
-
-        // Uniform Buffer: 3 matrices (64*3 = 192) + 1 float (4) + Padding = 256 bytes total
+        // --- 4. Uniform Buffers ---
         const sceneUniformBuffer = device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const lightUniformBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
@@ -208,32 +189,85 @@
             vertex: {
                 module: shaderModule,
                 entryPoint: 'vs_main',
-                buffers: [{
-                    arrayStride: 20,
-                    attributes: [
-                        { shaderLocation: 0, offset: 0, format: 'float32x3' }, 
-                        { shaderLocation: 1, offset: 12, format: 'float32x2' }
-                    ]
-                }]
+                buffers: [{ arrayStride: 20, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x2' }] }]
             },
-            fragment: {
-                module: shaderModule,
-                entryPoint: 'fs_main',
-                targets: [{ format: format }]
-            },
+            fragment: { module: shaderModule, entryPoint: 'fs_main', targets: [{ format: format }] },
             primitive: { topology: 'triangle-list' },
             depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' }
         });
 
-        const mainBindGroup = device.createBindGroup({
-            layout: mainPipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: sceneUniformBuffer } },
-                { binding: 1, resource: shadowDepthTexture.createView() },
-                { binding: 2, resource: shadowSampler },
-            ]
+        // Common sampler for all sizes
+        const shadowSampler = device.createSampler({
+            compare: 'less', 
+            magFilter: 'linear', 
+            minFilter: 'linear',
         });
 
+        // --- 6. DYNAMIC RESOURCE MANAGEMENT ---
+        
+        let shadowDepthTexture;
+        let shadowDepthTextureView;
+        let mainBindGroup;
+
+        // Function to rebuild texture and bind group when size changes
+        function updateShadowResolution(size) {
+            // 1. Cleanup old texture
+            if (shadowDepthTexture) {
+                shadowDepthTexture.destroy();
+            }
+
+            // 2. Create new texture
+            shadowDepthTexture = device.createTexture({
+                size: [size, size, 1],
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+                format: 'depth32float',
+            });
+            shadowDepthTextureView = shadowDepthTexture.createView();
+
+            // 3. Recreate the Main Pass Bind Group
+            // The bind group must be recreated because it links to a specific texture view object.
+            mainBindGroup = device.createBindGroup({
+                layout: mainPipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: sceneUniformBuffer } },
+                    { binding: 1, resource: shadowDepthTextureView }, // New View
+                    { binding: 2, resource: shadowSampler },
+                ]
+            });
+
+            console.log(`Shadow map updated to ${size}x${size}`);
+        }
+
+        // Initialize with default
+        updateShadowResolution(64);
+
+        // --- 7. UI Logic ---
+        const modeBtn = document.getElementById('modeBtn');
+        const resBtn = document.getElementById('resBtn');
+        
+        // Mode Toggle
+        let isGatherMode = false;
+        const modeData = new Float32Array([0.0]); 
+        modeBtn.addEventListener('click', () => {
+            isGatherMode = !isGatherMode;
+            modeBtn.innerText = isGatherMode ? "Mode: Gather (Manual Box)" : "Mode: Sample (PCF)";
+            modeBtn.classList.toggle('active', isGatherMode);
+            modeData[0] = isGatherMode ? 1.0 : 0.0;
+        });
+
+        // Resolution Cycle
+        const resolutions = [64, 128, 256];
+        let resIndex = 0;
+        resBtn.addEventListener('click', () => {
+            resIndex = (resIndex + 1) % resolutions.length;
+            const newSize = resolutions[resIndex];
+            resBtn.innerText = `Size: ${newSize}x${newSize}`;
+            
+            // Rebuild GPU resources
+            updateShadowResolution(newSize);
+        });
+
+        // --- 8. Standard Setup ---
         let canvasDepthTexture = null;
         function resizeCanvasDepth() {
             if (canvasDepthTexture) canvasDepthTexture.destroy();
@@ -244,108 +278,46 @@
             });
         }
 
-        // --- 6. Math Helpers ---
+        // Math
         const mat4 = {
             create: () => new Float32Array(16),
             perspective: (out, fovy, aspect, near, far) => {
-                const f = 1.0 / Math.tan(fovy / 2);
-                out.fill(0); out[0] = f / aspect; out[5] = f;
-                out[10] = far / (near - far); out[11] = -1;
-                out[14] = (far * near) / (near - far); return out;
+                const f = 1.0 / Math.tan(fovy / 2); out.fill(0); out[0] = f / aspect; out[5] = f; out[10] = far / (near - far); out[11] = -1; out[14] = (far * near) / (near - far); return out;
             },
             ortho: (out, left, right, bottom, top, near, far) => {
-                const lr = 1 / (left - right), bt = 1 / (bottom - top), nf = 1 / (near - far);
-                out[0] = -2 * lr; out[5] = -2 * bt; out[10] = nf; 
-                out[12] = (left + right) * lr; out[13] = (top + bottom) * bt; out[14] = near * nf;
-                out[15] = 1; return out;
+                const lr = 1 / (left - right), bt = 1 / (bottom - top), nf = 1 / (near - far); out[0] = -2 * lr; out[5] = -2 * bt; out[10] = nf; out[12] = (left + right) * lr; out[13] = (top + bottom) * bt; out[14] = near * nf; out[15] = 1; return out;
             },
             lookAt: (out, eye, center, up) => {
                 let x0, x1, x2, y0, y1, y2, z0, z1, z2, len;
-                let eyex = eye[0], eyey = eye[1], eyez = eye[2];
-                let upx = up[0], upy = up[1], upz = up[2];
-                let centerx = center[0], centery = center[1], centerz = center[2];
-                z0 = eyex - centerx; z1 = eyey - centery; z2 = eyez - centerz;
-                len = 1 / Math.sqrt(z0*z0 + z1*z1 + z2*z2); z0*=len; z1*=len; z2*=len;
-                x0 = upy*z2 - upz*z1; x1 = upz*z0 - upx*z2; x2 = upx*z1 - upy*z0;
-                len = Math.sqrt(x0*x0 + x1*x1 + x2*x2);
-                if (!len) {x0=0;x1=0;x2=0} else {len=1/len; x0*=len; x1*=len; x2*=len;}
-                y0 = z1*x2 - z2*x1; y1 = z2*x0 - z0*x2; y2 = z0*x1 - z1*x0;
-                len = Math.sqrt(y0*y0 + y1*y1 + y2*y2);
-                if (!len) {y0=0;y1=0;y2=0} else {len=1/len; y0*=len; y1*=len; y2*=len;}
-                out[0]=x0; out[1]=y0; out[2]=z0; out[3]=0; out[4]=x1; out[5]=y1; out[6]=z1; out[7]=0;
-                out[8]=x2; out[9]=y2; out[10]=z2; out[11]=0;
-                out[12]=-(x0*eyex + x1*eyey + x2*eyez); out[13]=-(y0*eyex + y1*eyey + y2*eyez);
-                out[14]=-(z0*eyex + z1*eyey + z2*eyez); out[15]=1; return out;
+                let eyex = eye[0], eyey = eye[1], eyez = eye[2]; let upx = up[0], upy = up[1], upz = up[2]; let centerx = center[0], centery = center[1], centerz = center[2];
+                z0 = eyex - centerx; z1 = eyey - centery; z2 = eyez - centerz; len = 1 / Math.sqrt(z0*z0 + z1*z1 + z2*z2); z0*=len; z1*=len; z2*=len;
+                x0 = upy*z2 - upz*z1; x1 = upz*z0 - upx*z2; x2 = upx*z1 - upy*z0; len = Math.sqrt(x0*x0 + x1*x1 + x2*x2); if (!len) {x0=0;x1=0;x2=0} else {len=1/len; x0*=len; x1*=len; x2*=len;}
+                y0 = z1*x2 - z2*x1; y1 = z2*x0 - z0*x2; y2 = z0*x1 - z1*x0; len = Math.sqrt(y0*y0 + y1*y1 + y2*y2); if (!len) {y0=0;y1=0;y2=0} else {len=1/len; y0*=len; y1*=len; y2*=len;}
+                out[0]=x0; out[1]=y0; out[2]=z0; out[3]=0; out[4]=x1; out[5]=y1; out[6]=z1; out[7]=0; out[8]=x2; out[9]=y2; out[10]=z2; out[11]=0; out[12]=-(x0*eyex + x1*eyey + x2*eyez); out[13]=-(y0*eyex + y1*eyey + y2*eyez); out[14]=-(z0*eyex + z1*eyey + z2*eyez); out[15]=1; return out;
             },
             multiply: (out, a, b) => {
-                let a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
-                let a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
-                let a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
-                let a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
-                let b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
-                out[0] = b0*a00+b1*a10+b2*a20+b3*a30; out[1] = b0*a01+b1*a11+b2*a21+b3*a31;
-                out[2] = b0*a02+b1*a12+b2*a22+b3*a32; out[3] = b0*a03+b1*a13+b2*a23+b3*a33;
-                b0 = b[4]; b1 = b[5]; b2 = b[6]; b3 = b[7];
-                out[4] = b0*a00+b1*a10+b2*a20+b3*a30; out[5] = b0*a01+b1*a11+b2*a21+b3*a31;
-                out[6] = b0*a02+b1*a12+b2*a22+b3*a32; out[7] = b0*a03+b1*a13+b2*a23+b3*a33;
-                b0 = b[8]; b1 = b[9]; b2 = b[10]; b3 = b[11];
-                out[8] = b0*a00+b1*a10+b2*a20+b3*a30; out[9] = b0*a01+b1*a11+b2*a21+b3*a31;
-                out[10] = b0*a02+b1*a12+b2*a22+b3*a32; out[11] = b0*a03+b1*a13+b2*a23+b3*a33;
-                b0 = b[12]; b1 = b[13]; b2 = b[14]; b3 = b[15];
-                out[12] = b0*a00+b1*a10+b2*a20+b3*a30; out[13] = b0*a01+b1*a11+b2*a21+b3*a31;
-                out[14] = b0*a02+b1*a12+b2*a22+b3*a32; out[15] = b0*a03+b1*a13+b2*a23+b3*a33;
-                return out;
+                let a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3]; let a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7]; let a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11]; let a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15]; let b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+                out[0] = b0*a00+b1*a10+b2*a20+b3*a30; out[1] = b0*a01+b1*a11+b2*a21+b3*a31; out[2] = b0*a02+b1*a12+b2*a22+b3*a32; out[3] = b0*a03+b1*a13+b2*a23+b3*a33;
+                b0 = b[4]; b1 = b[5]; b2 = b[6]; b3 = b[7]; out[4] = b0*a00+b1*a10+b2*a20+b3*a30; out[5] = b0*a01+b1*a11+b2*a21+b3*a31; out[6] = b0*a02+b1*a12+b2*a22+b3*a32; out[7] = b0*a03+b1*a13+b2*a23+b3*a33;
+                b0 = b[8]; b1 = b[9]; b2 = b[10]; b3 = b[11]; out[8] = b0*a00+b1*a10+b2*a20+b3*a30; out[9] = b0*a01+b1*a11+b2*a21+b3*a31; out[10] = b0*a02+b1*a12+b2*a22+b3*a32; out[11] = b0*a03+b1*a13+b2*a23+b3*a33;
+                b0 = b[12]; b1 = b[13]; b2 = b[14]; b3 = b[15]; out[12] = b0*a00+b1*a10+b2*a20+b3*a30; out[13] = b0*a01+b1*a11+b2*a21+b3*a31; out[14] = b0*a02+b1*a12+b2*a22+b3*a32; out[15] = b0*a03+b1*a13+b2*a23+b3*a33; return out;
             },
             identity: (out) => { out.fill(0); out[0]=1; out[5]=1; out[10]=1; out[15]=1; return out; }
         };
 
-        // --- 7. State & UI Interaction ---
-        const lightProj = mat4.create();
-        const lightView = mat4.create();
-        const lightMVP = mat4.create(); 
-        const proj = mat4.create();
-        const view = mat4.create();
-        const mvp = mat4.create();
-        const model = mat4.create();
-
-        // UI STATE
-        let isGatherMode = false;
-        const toggleBtn = document.getElementById('toggleBtn');
-        const statusDiv = document.getElementById('status');
-        const modeData = new Float32Array([0.0]); // 0.0 = Sample, 1.0 = Gather
-
-        toggleBtn.addEventListener('click', () => {
-            isGatherMode = !isGatherMode;
-            if (isGatherMode) {
-                statusDiv.innerText = "Mode: Gather (Manual Box)";
-                toggleBtn.innerText = "Switch to Sample";
-                toggleBtn.classList.add('active');
-                modeData[0] = 1.0;
-            } else {
-                statusDiv.innerText = "Mode: Sample (PCF)";
-                toggleBtn.innerText = "Switch to Gather";
-                toggleBtn.classList.remove('active');
-                modeData[0] = 0.0;
-            }
-        });
-
-        const lightPos = [2, 4, 2];
-        const cameraPos = [0, 2, 4];
+        const lightProj = mat4.create(); const lightView = mat4.create(); const lightMVP = mat4.create(); 
+        const proj = mat4.create(); const view = mat4.create(); const mvp = mat4.create(); const model = mat4.create();
+        const lightPos = [2, 4, 2]; const cameraPos = [0, 2, 4];
 
         function resize() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            context.configure({
-                device: device,
-                format: format,
-                alphaMode: 'premultiplied',
-            });
+            context.configure({ device, format, alphaMode: 'premultiplied' });
             resizeCanvasDepth();
         }
         window.addEventListener('resize', resize);
         resize();
 
-        // --- 8. Render Loop ---
         function frame() {
             mat4.ortho(lightProj, -3, 3, -3, 3, 1.0, 20.0); 
             mat4.lookAt(lightView, lightPos, [0, 0, 0], [0, 1, 0]);
@@ -354,14 +326,10 @@
             const aspect = canvas.width / canvas.height;
             mat4.perspective(proj, (45 * Math.PI)/180, aspect, 0.1, 100.0);
             mat4.lookAt(view, cameraPos, [0, 0, 0], [0, 1, 0]);
-            
             mat4.identity(model);
             mat4.multiply(mvp, proj, view);
 
-            // Write Uniforms
             device.queue.writeBuffer(lightUniformBuffer, 0, lightMVP);
-            
-            // Layout: MVP(64) | LightMVP(64) | Model(64) | Mode(4)
             device.queue.writeBuffer(sceneUniformBuffer, 0, mvp);
             device.queue.writeBuffer(sceneUniformBuffer, 64, lightMVP);
             device.queue.writeBuffer(sceneUniformBuffer, 128, model);
@@ -369,11 +337,11 @@
 
             const commandEncoder = device.createCommandEncoder();
 
-            // Pass 1: Shadow
+            // Pass 1: Shadow (Uses DYNAMIC shadowDepthTextureView)
             const shadowPass = commandEncoder.beginRenderPass({
                 colorAttachments: [],
                 depthStencilAttachment: {
-                    view: shadowDepthTexture.createView(),
+                    view: shadowDepthTextureView, // <--- This view changes when button clicked
                     depthClearValue: 1.0,
                     depthLoadOp: 'clear',
                     depthStoreOp: 'store',
@@ -385,26 +353,24 @@
             shadowPass.draw(9);
             shadowPass.end();
 
-            // Pass 2: Main
-            const textureView = context.getCurrentTexture().createView();
-            const depthView = canvasDepthTexture.createView();
-
+            // Pass 2: Main (Uses DYNAMIC mainBindGroup)
             const mainPass = commandEncoder.beginRenderPass({
                 colorAttachments: [{
-                    view: textureView,
+                    view: context.getCurrentTexture().createView(),
                     clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
                     loadOp: 'clear',
                     storeOp: 'store',
                 }],
                 depthStencilAttachment: {
-                    view: depthView,
+                    view: canvasDepthTexture.createView(),
                     depthClearValue: 1.0,
                     depthLoadOp: 'clear',
                     depthStoreOp: 'store',
                 }
             });
             mainPass.setPipeline(mainPipeline);
-            mainPass.setBindGroup(0, mainBindGroup);
+            // We must use the bind group that matches the current texture size
+            mainPass.setBindGroup(0, mainBindGroup); 
             mainPass.setVertexBuffer(0, vertexBuffer);
             mainPass.draw(9);
             mainPass.end();
@@ -412,7 +378,6 @@
             device.queue.submit([commandEncoder.finish()]);
             requestAnimationFrame(frame);
         }
-
         requestAnimationFrame(frame);
     </script>
 </body>
