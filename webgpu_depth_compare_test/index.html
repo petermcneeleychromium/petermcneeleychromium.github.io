@@ -127,70 +127,88 @@
             const refValues = [-0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0];   // Reference values for comparison
 
             const formats = [
-                { name: 'depth24plus', format: 'depth24plus' }, // depth24unorm is usually depth24plus in WebGPU or similar
+                { name: 'depth24plus', format: 'depth24plus' }, 
                 { name: 'depth32float', format: 'depth32float' }
             ];
 
-            // Use depth24plus as depth24unorm might not be directly available or named differently
-            // Actually 'depth24plus' is common. Let's try 'depth24plus' and 'depth32float'.
-
             let report = "";
 
-            for (const fmt of formats) {
-                report += `<h3>Testing format: ${fmt.name}</h3>`;
-                report += `<div class='table-container'><table><tr><th>Texture Depth</th>` + refValues.map(v => `<th>Ref: ${v}</th>`).join('') + `</tr>`;
+            try {
+                for (const fmt of formats) {
+                    report += `<h3>Testing format: ${fmt.name}</h3>`;
+                    report += `<div class='table-container'><table><tr><th>Texture Depth</th>` + refValues.map(v => `<th>Ref: ${v}</th>`).join('') + `</tr>`;
 
-                for (const texDepth of depthValues) {
-                    let row = `<tr><td>${texDepth}</td>`;
-                    
-                    // Create texture
-                    const texture = device.createTexture({
-                        size: [1, 1],
-                        format: fmt.format,
-                        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-                    });
+                    for (const texDepth of depthValues) {
+                        let row = `<tr><td>${texDepth}</td>`;
+                        
+                        // Create texture
+                        const texture = device.createTexture({
+                            size: [1, 1],
+                            format: fmt.format,
+                            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+                        });
 
-                    // Initialize texture with texDepth
-                    const tempBuffer = device.createBuffer({
-                        size: 4,
-                        usage: GPUBufferUsage.COPY_SRC,
-                        mappedAtCreation: true
-                    });
-                    
-                    if (fmt.format === 'depth32float') {
-                        new Float32Array(tempBuffer.getMappedRange())[0] = texDepth;
-                    } else {
-                        // depth24plus usually expects 32-bit float input for copies that it then converts
-                        new Float32Array(tempBuffer.getMappedRange())[0] = Math.max(0, Math.min(1, texDepth));
+                        // Initialize texture with texDepth
+                        const tempBuffer = device.createBuffer({
+                            size: 4,
+                            usage: GPUBufferUsage.COPY_SRC,
+                            mappedAtCreation: true
+                        });
+                        
+                        if (fmt.format === 'depth32float') {
+                            new Float32Array(tempBuffer.getMappedRange())[0] = texDepth;
+                        } else {
+                            new Float32Array(tempBuffer.getMappedRange())[0] = Math.max(0, Math.min(1, texDepth));
+                        }
+                        tempBuffer.unmap();
+
+                        const encoder = device.createCommandEncoder();
+                        encoder.copyBufferToTexture(
+                            { buffer: tempBuffer },
+                            { texture: texture },
+                            { width: 1, height: 1 }
+                        );
+                        device.queue.submit([encoder.finish()]);
+
+                        for (const refDepth of refValues) {
+                            try {
+                                const result = await runCompare(fmt.format, texture, refDepth);
+                                row += `<td>${result}</td>`;
+                            } catch (e) {
+                                console.error(e);
+                                row += `<td class="error" title="${e.message}">ERR</td>`;
+                            }
+                        }
+                        row += `</tr>`;
+                        report += row;
+                        
+                        texture.destroy();
+                        tempBuffer.destroy();
                     }
-                    tempBuffer.unmap();
-
-                    const encoder = device.createCommandEncoder();
-                    encoder.copyBufferToTexture(
-                        { buffer: tempBuffer },
-                        { texture: texture },
-                        { width: 1, height: 1 }
-                    );
-                    device.queue.submit([encoder.finish()]);
-
-                    for (const refDepth of refValues) {
-                        const result = await runCompare(fmt.format, texture, refDepth);
-                        row += `<td>${result}</td>`;
-                    }
-                    row += `</tr>`;
-                    report += row;
-                    
-                    texture.destroy();
-                    tempBuffer.destroy();
+                    report += `</table></div>`;
                 }
-                report += `</table></div>`;
+                resultsDiv.innerHTML = report;
+            } catch (globalError) {
+                resultsDiv.innerHTML = `<div class="error"><h3>Fatal Test Error</h3><p>${globalError.message}</p><pre>${globalError.stack}</pre></div>`;
             }
-
-            resultsDiv.innerHTML = report;
         }
 
         async function runCompare(format, texture, refDepth) {
-            const shaderModule = device.createShaderModule({ code: shaderCode });
+            device.pushErrorScope('validation');
+            
+            const shaderModule = device.createShaderModule({ 
+                label: `Shader ${format} ${refDepth}`,
+                code: shaderCode 
+            });
+
+            // Check for early compilation errors
+            const compInfo = await shaderModule.getCompilationInfo();
+            if (compInfo.messages.some(m => m.type === 'error')) {
+                const errors = compInfo.messages.filter(m => m.type === 'error').map(m => m.message).join('\n');
+                device.popErrorScope(); // Cleanup scope
+                throw new Error(`Shader compilation failed:\n${errors}`);
+            }
+
             const pipeline = await device.createComputePipelineAsync({
                 layout: 'auto',
                 compute: { module: shaderModule, entryPoint: 'main' }
@@ -209,12 +227,11 @@
 
             const resultBuffer = device.createBuffer({
                 size: 4,
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
             });
+            // Initialize with canary value -1.0 to ensure shader actually runs and writes
+            device.queue.writeBuffer(resultBuffer, 0, new Float32Array([-1.0]));
 
-            // We need both bindings in the bind group because the shader uses both, 
-            // even though it only samples from one at a time.
-            // Dummy texture for the other slot.
             const dummyFormat = format === 'depth32float' ? 'depth24plus' : 'depth32float';
             const dummyTexture = device.createTexture({
                 size: [1, 1],
@@ -247,6 +264,11 @@
             encoder.copyBufferToBuffer(resultBuffer, 0, readBuffer, 0, 4);
 
             device.queue.submit([encoder.finish()]);
+
+            const validationError = await device.popErrorScope();
+            if (validationError) {
+                throw new Error(`WebGPU Validation Error: ${validationError.message}`);
+            }
 
             await readBuffer.mapAsync(GPUMapMode.READ);
             const res = new Float32Array(readBuffer.getMappedRange())[0];
