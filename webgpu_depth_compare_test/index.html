@@ -101,7 +101,7 @@
                 format_idx : u32, // 0: depth24unorm, 1: depth32float
                 depth_ref  : f32,
             };
-            @group(0) @binding(3) var<uniform> config : Config;
+            @group(0) @binding(3) var<storage, read> config : Config;
             @group(0) @binding(4) var<storage, read_write> results : array<f32>;
 
             @compute @workgroup_size(1)
@@ -123,8 +123,8 @@
             if (!device) return;
             resultsDiv.innerHTML = "Running tests...";
             
-            const depthValues = [0.0, 0.25, 0.5, 0.75, 1.0, -0.5, 1.5]; // Values to put in depth32float (some outside [0, 1])
-            const refValues = [-0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5];   // Reference values for comparison
+            const depthValues = [0.0, 0.25, 0.5, 0.75, 1.0, -0.5, 1.5, 2.0]; // Values to put in depth32float (some outside [0, 1])
+            const refValues = [-0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0];   // Reference values for comparison
 
             const formats = [
                 { name: 'depth24plus', format: 'depth24plus' }, // depth24unorm is usually depth24plus in WebGPU or similar
@@ -138,12 +138,9 @@
 
             for (const fmt of formats) {
                 report += `<h3>Testing format: ${fmt.name}</h3>`;
-                report += `<table><tr><th>Texture Depth</th>` + refValues.map(v => `<th>Ref: ${v}</th>`).join('') + `</tr>`;
+                report += `<div class='table-container'><table><tr><th>Texture Depth</th>` + refValues.map(v => `<th>Ref: ${v}</th>`).join('') + `</tr>`;
 
                 for (const texDepth of depthValues) {
-                    // Skip outside [0, 1] for depth24plus as it will be clamped/undefined upon creation/copy if we are not careful
-                    // but we want to see what happens if we TRY to put them there or if we just test the ref values.
-                    
                     let row = `<tr><td>${texDepth}</td>`;
                     
                     // Create texture
@@ -154,7 +151,6 @@
                     });
 
                     // Initialize texture with texDepth
-                    // For depth textures, we often need to render to them to set specific values or use copyBufferToTexture
                     const tempBuffer = device.createBuffer({
                         size: 4,
                         usage: GPUBufferUsage.COPY_SRC,
@@ -187,7 +183,7 @@
                     texture.destroy();
                     tempBuffer.destroy();
                 }
-                report += `</table>`;
+                report += `</table></div>`;
             }
 
             resultsDiv.innerHTML = report;
@@ -206,7 +202,7 @@
 
             const configBuffer = device.createBuffer({
                 size: 8,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
             });
             device.queue.writeBuffer(configBuffer, 0, new Uint32Array([format === 'depth32float' ? 1 : 0]));
             device.queue.writeBuffer(configBuffer, 4, new Float32Array([refDepth]));
