@@ -119,6 +119,23 @@
             }
         `;
 
+        const depthWriteShaderCode = `
+            struct Config {
+                val : f32,
+            };
+            @group(0) @binding(0) var<storage, read> config : Config;
+
+            @vertex
+            fn vs_main() -> @builtin(position) vec4<f32> {
+                return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            }
+
+            @fragment
+            fn fs_main() -> @builtin(frag_depth) f32 {
+                return config.val;
+            }
+        `;
+
         async function runTest() {
             if (!device) return;
             resultsDiv.innerHTML = "Running tests...";
@@ -134,7 +151,26 @@
             let report = "";
 
             try {
+                // Setup depth writer pipeline
+                const depthWriteModule = device.createShaderModule({ code: depthWriteShaderCode });
+                
                 for (const fmt of formats) {
+                    const depthWritePipeline = await device.createRenderPipelineAsync({
+                        layout: 'auto',
+                        vertex: { module: depthWriteModule, entryPoint: 'vs_main' },
+                        fragment: { 
+                            module: depthWriteModule, 
+                            entryPoint: 'fs_main',
+                            targets: [] 
+                        },
+                        primitive: { topology: 'point-list' },
+                        depthStencil: {
+                            format: fmt.format,
+                            depthWriteEnabled: true,
+                            depthCompare: 'always',
+                        }
+                    });
+
                     report += `<h3>Testing format: ${fmt.name}</h3>`;
                     report += `<div class='table-container'><table><tr><th>Texture Depth</th>` + refValues.map(v => `<th>Ref: ${v}</th>`).join('') + `</tr>`;
 
@@ -145,30 +181,38 @@
                         const texture = device.createTexture({
                             size: [1, 1],
                             format: fmt.format,
-                            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+                            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
                         });
 
-                        // Initialize texture with texDepth
-                        const tempBuffer = device.createBuffer({
+                        // Initialize texture with texDepth using the shader
+                        const valBuffer = device.createBuffer({
                             size: 4,
-                            usage: GPUBufferUsage.COPY_SRC,
-                            mappedAtCreation: true
+                            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
                         });
-                        
-                        if (fmt.format === 'depth32float') {
-                            new Float32Array(tempBuffer.getMappedRange())[0] = texDepth;
-                        } else {
-                            new Float32Array(tempBuffer.getMappedRange())[0] = Math.max(0, Math.min(1, texDepth));
-                        }
-                        tempBuffer.unmap();
+                        device.queue.writeBuffer(valBuffer, 0, new Float32Array([texDepth]));
+
+                        const bindGroup = device.createBindGroup({
+                            layout: depthWritePipeline.getBindGroupLayout(0),
+                            entries: [{ binding: 0, resource: { buffer: valBuffer } }]
+                        });
 
                         const encoder = device.createCommandEncoder();
-                        encoder.copyBufferToTexture(
-                            { buffer: tempBuffer },
-                            { texture: texture },
-                            { width: 1, height: 1 }
-                        );
+                        const pass = encoder.beginRenderPass({
+                            colorAttachments: [],
+                            depthStencilAttachment: {
+                                view: texture.createView(),
+                                depthClearValue: 0.0,
+                                depthLoadOp: 'clear',
+                                depthStoreOp: 'store',
+                            }
+                        });
+                        pass.setPipeline(depthWritePipeline);
+                        pass.setBindGroup(0, bindGroup);
+                        pass.draw(1);
+                        pass.end();
                         device.queue.submit([encoder.finish()]);
+                        
+                        valBuffer.destroy();
 
                         for (const refDepth of refValues) {
                             try {
@@ -183,7 +227,6 @@
                         report += row;
                         
                         texture.destroy();
-                        tempBuffer.destroy();
                     }
                     report += `</table></div>`;
                 }
