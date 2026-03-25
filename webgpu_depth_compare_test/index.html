@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGPU textureSampleCompare Depth Test</title>
+    <title>WebGPU textureSampleCompare Depth Test (Fragment)</title>
     <style>
         body {
             background-color: #1a1a1a;
@@ -42,25 +42,21 @@
             white-space: pre-wrap;
             overflow-x: auto;
         }
-        .success { color: #4ade80; }
         .error { color: #f87171; }
-        .info { color: #60a5fa; }
         .table-container { margin-top: 20px; }
         table { border-collapse: collapse; width: 100%; }
         th, td { border: 1px solid #444; padding: 8px; text-align: center; }
         th { background-color: #333; }
-        .match { background-color: #1e3a1e; }
-        .mismatch { background-color: #3a1e1e; }
     </style>
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Depth Test7</h1>
+        <h1>WebGPU textureSampleCompare Depth Test (Fragment Shader)2</h1>
         <div id="status">Initializing...</div>
     </header>
 
     <div class="controls">
-        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test7</button>
+        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test2</button>
     </div>
 
     <div id="results">
@@ -92,33 +88,39 @@
             statusDiv.style.color = "#4ade80";
         }
 
-        const shaderCode = `
+        // Shader for comparison using Fragment Shader
+        const compareShaderCode = `
             @group(0) @binding(0) var t_depth24 : texture_depth_2d;
             @group(0) @binding(1) var t_depth32 : texture_depth_2d;
             @group(0) @binding(2) var s_compare : sampler_comparison;
             
             struct Config {
-                format_idx : u32, // 0: depth24plus, 1: depth32float
+                format_idx : u32,
                 depth_ref  : f32,
             };
             @group(0) @binding(3) var<storage, read> config : Config;
-            @group(0) @binding(4) var<storage, read_write> results : array<f32>;
 
-            @compute @workgroup_size(1)
-            fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
-                let coords = vec2<u32>(global_id.xy);
-                var res : f32 = 0.0;
-                
+            @vertex
+            fn vs_main(@builtin(vertex_index) vertex_idx : u32) -> @builtin(position) vec4<f32> {
+                var pos = array<vec2<f32>, 3>(
+                    vec2<f32>(-1.0, -1.0),
+                    vec2<f32>(3.0, -1.0),
+                    vec2<f32>(-1.0, 3.0)
+                );
+                return vec4<f32>(pos[vertex_idx], 0.0, 1.0);
+            }
+
+            @fragment
+            fn fs_main() -> @location(0) f32 {
                 if (config.format_idx == 0u) {
-                    res = textureSampleCompareLevel(t_depth24, s_compare, vec2<f32>(0.5, 0.5), config.depth_ref);
+                    return textureSampleCompare(t_depth24, s_compare, vec2<f32>(0.5, 0.5), config.depth_ref);
                 } else {
-                    res = textureSampleCompareLevel(t_depth32, s_compare, vec2<f32>(0.5, 0.5), config.depth_ref);
+                    return textureSampleCompare(t_depth32, s_compare, vec2<f32>(0.5, 0.5), config.depth_ref);
                 }
-                
-                results[global_id.x] = res;
             }
         `;
 
+        // Shader for initializing depth
         const depthWriteShaderCode = `
             struct Config {
                 val : f32,
@@ -145,7 +147,7 @@
             if (!device) return;
             resultsDiv.innerHTML = "Running tests...";
             
-            const depthValues = [-1.0, -0.5 , 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]; 
+            const depthValues = [-1.0, -0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]; 
             const refValues = depthValues;   
             const formats = [
                 { name: 'depth24plus', format: 'depth24plus' }, 
@@ -155,18 +157,15 @@
             let report = "";
 
             try {
-                // Setup depth writer pipeline
                 const depthWriteModule = device.createShaderModule({ code: depthWriteShaderCode });
+                const compareModule = device.createShaderModule({ code: compareShaderCode });
                 
                 for (const fmt of formats) {
                     const depthWritePipeline = await device.createRenderPipelineAsync({
+                        label: `Depth Init ${fmt.name}`,
                         layout: 'auto',
                         vertex: { module: depthWriteModule, entryPoint: 'vs_main' },
-                        fragment: { 
-                            module: depthWriteModule, 
-                            entryPoint: 'fs_main',
-                            targets: [] 
-                        },
+                        fragment: { module: depthWriteModule, entryPoint: 'fs_main', targets: [] },
                         primitive: { topology: 'triangle-list' },
                         depthStencil: {
                             format: fmt.format,
@@ -175,33 +174,44 @@
                         }
                     });
 
+                    const comparePipeline = await device.createRenderPipelineAsync({
+                        label: `Compare ${fmt.name}`,
+                        layout: 'auto',
+                        vertex: { module: compareModule, entryPoint: 'vs_main' },
+                        fragment: { 
+                            module: compareModule, 
+                            entryPoint: 'fs_main', 
+                            targets: [{ format: 'r32float' }] 
+                        },
+                        primitive: { topology: 'triangle-list' }
+                    });
+
                     report += `<h3>Testing format: ${fmt.name}</h3>`;
                     report += `<div class='table-container'><table><tr><th>Texture Depth</th>` + refValues.map(v => `<th>Ref: ${v}</th>`).join('') + `</tr>`;
 
                     for (const texDepth of depthValues) {
                         let row = `<tr><td>${texDepth}</td>`;
                         
-                        // Create 256x256 texture
                         const texture = device.createTexture({
                             size: [256, 256],
                             format: fmt.format,
                             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
                         });
 
-                        // Initialize texture with texDepth using the shader
+                        // 1. Initialize Depth Texture
                         const valBuffer = device.createBuffer({
                             size: 4,
                             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
                         });
                         device.queue.writeBuffer(valBuffer, 0, new Float32Array([texDepth]));
 
-                        const bindGroup = device.createBindGroup({
+                        const initBindGroup = device.createBindGroup({
                             layout: depthWritePipeline.getBindGroupLayout(0),
                             entries: [{ binding: 0, resource: { buffer: valBuffer } }]
                         });
 
-                        const encoder = device.createCommandEncoder();
-                        const pass = encoder.beginRenderPass({
+                        const initEncoder = device.createCommandEncoder();
+                        const initPass = initEncoder.beginRenderPass({
                             colorAttachments: [],
                             depthStencilAttachment: {
                                 view: texture.createView(),
@@ -210,17 +220,17 @@
                                 depthStoreOp: 'store',
                             }
                         });
-                        pass.setPipeline(depthWritePipeline);
-                        pass.setBindGroup(0, bindGroup);
-                        pass.draw(3); // Draw a full-screen triangle
-                        pass.end();
-                        device.queue.submit([encoder.finish()]);
-                        
+                        initPass.setPipeline(depthWritePipeline);
+                        initPass.setBindGroup(0, initBindGroup);
+                        initPass.draw(3);
+                        initPass.end();
+                        device.queue.submit([initEncoder.finish()]);
                         valBuffer.destroy();
 
+                        // 2. Compare for each Ref Value
                         for (const refDepth of refValues) {
                             try {
-                                const result = await runCompare(fmt.format, texture, refDepth);
+                                const result = await runCompareFragment(fmt.format, texture, refDepth, comparePipeline);
                                 row += `<td>${result}</td>`;
                             } catch (e) {
                                 console.error(e);
@@ -229,7 +239,6 @@
                         }
                         row += `</tr>`;
                         report += row;
-                        
                         texture.destroy();
                     }
                     report += `</table></div>`;
@@ -240,30 +249,10 @@
             }
         }
 
-        async function runCompare(format, texture, refDepth) {
+        async function runCompareFragment(format, texture, refDepth, pipeline) {
             device.pushErrorScope('validation');
-            
-            const shaderModule = device.createShaderModule({ 
-                label: `Shader ${format} ${refDepth}`,
-                code: shaderCode 
-            });
 
-            // Check for early compilation errors
-            const compInfo = await shaderModule.getCompilationInfo();
-            if (compInfo.messages.some(m => m.type === 'error')) {
-                const errors = compInfo.messages.filter(m => m.type === 'error').map(m => m.message).join('\n');
-                device.popErrorScope(); // Cleanup scope
-                throw new Error(`Shader compilation failed:\n${errors}`);
-            }
-
-            const pipeline = await device.createComputePipelineAsync({
-                layout: 'auto',
-                compute: { module: shaderModule, entryPoint: 'main' }
-            });
-
-            const sampler = device.createSampler({
-                compare: 'less'
-            });
+            const sampler = device.createSampler({ compare: 'less-equal' });
 
             const configBuffer = device.createBuffer({
                 size: 8,
@@ -272,12 +261,11 @@
             device.queue.writeBuffer(configBuffer, 0, new Uint32Array([format === 'depth32float' ? 1 : 0]));
             device.queue.writeBuffer(configBuffer, 4, new Float32Array([refDepth]));
 
-            const resultBuffer = device.createBuffer({
-                size: 4,
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+            const outputTexture = device.createTexture({
+                size: [1, 1],
+                format: 'r32float',
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
             });
-            // Initialize with canary value -1.0 to ensure shader actually runs and writes
-            device.queue.writeBuffer(resultBuffer, 0, new Float32Array([-1.0]));
 
             const dummyFormat = format === 'depth32float' ? 'depth24plus' : 'depth32float';
             const dummyTexture = device.createTexture({
@@ -292,38 +280,46 @@
                     { binding: 0, resource: format === 'depth32float' ? dummyTexture.createView() : texture.createView() },
                     { binding: 1, resource: format === 'depth32float' ? texture.createView() : dummyTexture.createView() },
                     { binding: 2, resource: sampler },
-                    { binding: 3, resource: { buffer: configBuffer } },
-                    { binding: 4, resource: { buffer: resultBuffer } }
+                    { binding: 3, resource: { buffer: configBuffer } }
                 ]
             });
 
             const encoder = device.createCommandEncoder();
-            const pass = encoder.beginComputePass();
+            const pass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: outputTexture.createView(),
+                    clearValue: { r: -1.0, g: 0, b: 0, a: 0 },
+                    loadOp: 'clear',
+                    storeOp: 'store'
+                }]
+            });
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
-            pass.dispatchWorkgroups(1);
+            pass.draw(3);
             pass.end();
 
             const readBuffer = device.createBuffer({
                 size: 4,
                 usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
             });
-            encoder.copyBufferToBuffer(resultBuffer, 0, readBuffer, 0, 4);
+            encoder.copyTextureToBuffer(
+                { texture: outputTexture },
+                { buffer: readBuffer, bytesPerRow: 256 }, // r32float 1x1 is 4 bytes, but bytesPerRow min is 256 (actually just needs to be valid)
+                { width: 1, height: 1 }
+            );
 
             device.queue.submit([encoder.finish()]);
 
             const validationError = await device.popErrorScope();
-            if (validationError) {
-                throw new Error(`WebGPU Validation Error: ${validationError.message}`);
-            }
+            if (validationError) throw new Error(`WebGPU Validation Error: ${validationError.message}`);
 
             await readBuffer.mapAsync(GPUMapMode.READ);
             const res = new Float32Array(readBuffer.getMappedRange())[0];
             readBuffer.unmap();
 
             dummyTexture.destroy();
+            outputTexture.destroy();
             configBuffer.destroy();
-            resultBuffer.destroy();
             readBuffer.destroy();
 
             return res;
