@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGPU textureSampleCompare Depth Test3</title>
+    <title>WebGPU textureSampleCompare Depth Test4</title>
     <style>
         body {
             background-color: #1a1a1a;
@@ -55,7 +55,7 @@
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Depth Test3</h1>
+        <h1>WebGPU textureSampleCompare Depth Test4</h1>
         <div id="status">Initializing...</div>
     </header>
 
@@ -140,9 +140,8 @@
             if (!device) return;
             resultsDiv.innerHTML = "Running tests...";
             
-            const depthValues = [0.0, 0.25, 0.5, 0.75, 1.0, -0.5, 1.5, 2.0]; // Values to put in depth32float (some outside [0, 1])
-            const refValues = [-0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0];   // Reference values for comparison
-
+            const depthValues = [-1.0, -0.5 , 0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]; 
+            const refValues = depthValues;   
             const formats = [
                 { name: 'depth24plus', format: 'depth24plus' }, 
                 { name: 'depth32float', format: 'depth32float' }
