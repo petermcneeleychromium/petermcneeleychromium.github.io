@@ -20,8 +20,15 @@
             background-color: #2a2a2a;
             border: 1px solid #444;
             display: flex;
-            gap: 15px;
+            gap: 20px;
             align-items: center;
+            flex-wrap: wrap;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
         }
         button {
             cursor: pointer;
@@ -47,16 +54,25 @@
         table { border-collapse: collapse; width: 100%; }
         th, td { border: 1px solid #444; padding: 8px; text-align: center; }
         th { background-color: #333; }
+        .clamped-val { font-size: 0.7rem; color: #aaa; display: block; margin-top: 2px; }
     </style>
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Depth Test (Fragment Shader)2</h1>
+        <h1>WebGPU textureSampleCompare Depth Test (Fragment Shader)</h1>
         <div id="status">Initializing...</div>
     </header>
 
     <div class="controls">
-        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test2</button>
+        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test</button>
+        <div class="checkbox-group">
+            <input type="checkbox" id="clamp-0-1">
+            <label for="clamp-0-1">Clamp Ref [0.0, 1.0]</label>
+        </div>
+        <div class="checkbox-group">
+            <input type="checkbox" id="clamp-safe">
+            <label for="clamp-safe">Clamp Ref [1e-6, 1.0 - 1e-6]</label>
+        </div>
     </div>
 
     <div id="results">
@@ -88,7 +104,6 @@
             statusDiv.style.color = "#4ade80";
         }
 
-        // Shader for comparison using Fragment Shader
         const compareShaderCode = `
             @group(0) @binding(0) var t_depth24 : texture_depth_2d;
             @group(0) @binding(1) var t_depth32 : texture_depth_2d;
@@ -120,7 +135,6 @@
             }
         `;
 
-        // Shader for initializing depth
         const depthWriteShaderCode = `
             struct Config {
                 val : f32,
@@ -154,7 +168,13 @@
                 { name: 'depth32float', format: 'depth32float' }
             ];
 
+            const doClamp01 = document.getElementById('clamp-0-1').checked;
+            const doClampSafe = document.getElementById('clamp-safe').checked;
+
             let report = "";
+            if (doClamp01 || doClampSafe) {
+                report += `<p class="info">Clamping enabled: ${doClamp01 ? '[0, 1] ' : ''}${doClampSafe ? '[1e-6, 1.0-1e-6]' : ''}</p>`;
+            }
 
             try {
                 const depthWriteModule = device.createShaderModule({ code: depthWriteShaderCode });
@@ -162,7 +182,6 @@
                 
                 for (const fmt of formats) {
                     const depthWritePipeline = await device.createRenderPipelineAsync({
-                        label: `Depth Init ${fmt.name}`,
                         layout: 'auto',
                         vertex: { module: depthWriteModule, entryPoint: 'vs_main' },
                         fragment: { module: depthWriteModule, entryPoint: 'fs_main', targets: [] },
@@ -175,7 +194,6 @@
                     });
 
                     const comparePipeline = await device.createRenderPipelineAsync({
-                        label: `Compare ${fmt.name}`,
                         layout: 'auto',
                         vertex: { module: compareModule, entryPoint: 'vs_main' },
                         fragment: { 
@@ -198,7 +216,6 @@
                             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
                         });
 
-                        // 1. Initialize Depth Texture
                         const valBuffer = device.createBuffer({
                             size: 4,
                             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
@@ -227,11 +244,24 @@
                         device.queue.submit([initEncoder.finish()]);
                         valBuffer.destroy();
 
-                        // 2. Compare for each Ref Value
                         for (const refDepth of refValues) {
                             try {
-                                const result = await runCompareFragment(fmt.format, texture, refDepth, comparePipeline);
-                                row += `<td>${result}</td>`;
+                                let finalRef = refDepth;
+                                if (doClamp01) {
+                                    finalRef = Math.max(0, Math.min(1, finalRef));
+                                }
+                                if (doClampSafe) {
+                                    const eps = 1e-6;
+                                    finalRef = Math.max(eps, Math.min(1.0 - eps, finalRef));
+                                }
+
+                                const result = await runCompareFragment(fmt.format, texture, finalRef, comparePipeline);
+                                
+                                let cellContent = `${result}`;
+                                if (finalRef !== refDepth) {
+                                    cellContent += `<span class="clamped-val">(${finalRef.toFixed(4)})</span>`;
+                                }
+                                row += `<td>${cellContent}</td>`;
                             } catch (e) {
                                 console.error(e);
                                 row += `<td class="error" title="${e.message}">ERR</td>`;
@@ -304,7 +334,7 @@
             });
             encoder.copyTextureToBuffer(
                 { texture: outputTexture },
-                { buffer: readBuffer, bytesPerRow: 256 }, // r32float 1x1 is 4 bytes, but bytesPerRow min is 256 (actually just needs to be valid)
+                { buffer: readBuffer, bytesPerRow: 256 },
                 { width: 1, height: 1 }
             );
 
