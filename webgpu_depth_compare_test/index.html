@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGPU textureSampleCompare Depth Test4</title>
+    <title>WebGPU textureSampleCompare Depth Test</title>
     <style>
         body {
             background-color: #1a1a1a;
@@ -55,12 +55,12 @@
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Depth Test5</h1>
+        <h1>WebGPU textureSampleCompare Depth Test6</h1>
         <div id="status">Initializing...</div>
     </header>
 
     <div class="controls">
-        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test</button>
+        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test6</button>
     </div>
 
     <div id="results">
@@ -98,7 +98,7 @@
             @group(0) @binding(2) var s_compare : sampler_comparison;
             
             struct Config {
-                format_idx : u32, // 0: depth24unorm, 1: depth32float
+                format_idx : u32, // 0: depth24plus, 1: depth32float
                 depth_ref  : f32,
             };
             @group(0) @binding(3) var<storage, read> config : Config;
@@ -126,8 +126,13 @@
             @group(0) @binding(0) var<storage, read> config : Config;
 
             @vertex
-            fn vs_main() -> @builtin(position) vec4<f32> {
-                return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            fn vs_main(@builtin(vertex_index) vertex_idx : u32) -> @builtin(position) vec4<f32> {
+                var pos = array<vec2<f32>, 3>(
+                    vec2<f32>(-1.0, -1.0),
+                    vec2<f32>(3.0, -1.0),
+                    vec2<f32>(-1.0, 3.0)
+                );
+                return vec4<f32>(pos[vertex_idx], 0.0, 1.0);
             }
 
             @fragment
@@ -162,7 +167,7 @@
                             entryPoint: 'fs_main',
                             targets: [] 
                         },
-                        primitive: { topology: 'point-list' },
+                        primitive: { topology: 'triangle-list' },
                         depthStencil: {
                             format: fmt.format,
                             depthWriteEnabled: true,
@@ -176,9 +181,9 @@
                     for (const texDepth of depthValues) {
                         let row = `<tr><td>${texDepth}</td>`;
                         
-                        // Create texture
+                        // Create 256x256 texture
                         const texture = device.createTexture({
-                            size: [1, 1],
+                            size: [256, 256],
                             format: fmt.format,
                             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
                         });
@@ -207,7 +212,7 @@
                         });
                         pass.setPipeline(depthWritePipeline);
                         pass.setBindGroup(0, bindGroup);
-                        pass.draw(1);
+                        pass.draw(3); // Draw a full-screen triangle
                         pass.end();
                         device.queue.submit([encoder.finish()]);
                         
@@ -257,7 +262,7 @@
             });
 
             const sampler = device.createSampler({
-                compare: 'greater'
+                compare: 'less-equal'
             });
 
             const configBuffer = device.createBuffer({
@@ -276,7 +281,7 @@
 
             const dummyFormat = format === 'depth32float' ? 'depth24plus' : 'depth32float';
             const dummyTexture = device.createTexture({
-                size: [1, 1],
+                size: [256, 256],
                 format: dummyFormat,
                 usage: GPUTextureUsage.TEXTURE_BINDING
             });
