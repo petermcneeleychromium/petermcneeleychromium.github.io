@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGPU textureSampleCompare Depth Test2</title>
+    <title>WebGPU textureSampleCompare Depth Test3</title>
     <style>
         body {
             background-color: #1a1a1a;
@@ -55,7 +55,7 @@
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Depth Test2</h1>
+        <h1>WebGPU textureSampleCompare Depth Test3</h1>
         <div id="status">Initializing...</div>
     </header>
 
@@ -258,7 +258,7 @@
             });
 
             const sampler = device.createSampler({
-                compare: 'less-equal'
+                compare: 'less'
             });
 
             const configBuffer = device.createBuffer({
