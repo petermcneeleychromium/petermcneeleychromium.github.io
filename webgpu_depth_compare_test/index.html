@@ -55,12 +55,12 @@
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Depth Test6</h1>
+        <h1>WebGPU textureSampleCompare Depth Test7</h1>
         <div id="status">Initializing...</div>
     </header>
 
     <div class="controls">
-        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test6</button>
+        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test7</button>
     </div>
 
     <div id="results">
@@ -262,7 +262,7 @@
             });
 
             const sampler = device.createSampler({
-                compare: 'less-equal'
+                compare: 'less'
             });
 
             const configBuffer = device.createBuffer({
