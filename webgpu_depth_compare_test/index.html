@@ -20,15 +20,29 @@
             background-color: #2a2a2a;
             border: 1px solid #444;
             display: flex;
+            flex-direction: column;
+            gap: 15px;
+            align-items: flex-start;
+        }
+        .control-row {
+            display: flex;
             gap: 20px;
             align-items: center;
             flex-wrap: wrap;
         }
-        .checkbox-group {
+        .checkbox-group, .radio-group {
             display: flex;
             align-items: center;
             gap: 8px;
             font-size: 0.9rem;
+        }
+        .radio-container {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 10px;
+            background: #111;
+            border: 1px solid #444;
         }
         button {
             cursor: pointer;
@@ -55,6 +69,7 @@
         th, td { border: 1px solid #444; padding: 8px; text-align: center; }
         th { background-color: #333; }
         .clamped-val { font-size: 0.7rem; color: #aaa; display: block; margin-top: 2px; }
+        .info { color: #60a5fa; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -64,14 +79,30 @@
     </header>
 
     <div class="controls">
-        <button id="run-btn" onclick="runTest()">Run Depth Comparison Test</button>
-        <div class="checkbox-group">
-            <input type="checkbox" id="clamp-0-1">
-            <label for="clamp-0-1">Clamp Ref [0.0, 1.0]</label>
+        <div class="control-row">
+            <button id="run-btn" onclick="runTest()">Run Depth Comparison Test</button>
+            <div class="checkbox-group">
+                <input type="checkbox" id="clamp-0-1">
+                <label for="clamp-0-1">Clamp Ref [0.0, 1.0]</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="clamp-safe">
+                <label for="clamp-safe">Clamp Ref [1e-6, 1.0 - 1e-6]</label>
+            </div>
         </div>
-        <div class="checkbox-group">
-            <input type="checkbox" id="clamp-safe">
-            <label for="clamp-safe">Clamp Ref [1e-6, 1.0 - 1e-6]</label>
+        
+        <div class="control-row">
+            <span>Sampler Compare:</span>
+            <div class="radio-container" id="compare-radios">
+                <div class="radio-group"><input type="radio" name="compare" value="never" id="c-never"><label for="c-never">never</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="less" id="c-less"><label for="c-less">less</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="equal" id="c-equal"><label for="c-equal">equal</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="less-equal" id="c-less-equal" checked><label for="c-less-equal">less-equal</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="greater" id="c-greater"><label for="c-greater">greater</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="not-equal" id="c-not-equal"><label for="c-not-equal">not-equal</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="greater-equal" id="c-greater-equal"><label for="c-greater-equal">greater-equal</label></div>
+                <div class="radio-group"><input type="radio" name="compare" value="always" id="c-always"><label for="c-always">always</label></div>
+            </div>
         </div>
     </div>
 
@@ -170,11 +201,10 @@
 
             const doClamp01 = document.getElementById('clamp-0-1').checked;
             const doClampSafe = document.getElementById('clamp-safe').checked;
+            const compareFunc = document.querySelector('input[name="compare"]:checked').value;
 
             let report = "";
-            if (doClamp01 || doClampSafe) {
-                report += `<p class="info">Clamping enabled: ${doClamp01 ? '[0, 1] ' : ''}${doClampSafe ? '[1e-6, 1.0-1e-6]' : ''}</p>`;
-            }
+            report += `<p class="info">Sampler Compare: <b>${compareFunc}</b> | Clamping: ${doClamp01 ? '[0, 1] ' : ''}${doClampSafe ? '[1e-6, 1.0-1e-6]' : (doClamp01 || doClampSafe ? '' : 'none')}</p>`;
 
             try {
                 const depthWriteModule = device.createShaderModule({ code: depthWriteShaderCode });
@@ -247,15 +277,13 @@
                         for (const refDepth of refValues) {
                             try {
                                 let finalRef = refDepth;
-                                if (doClamp01) {
-                                    finalRef = Math.max(0, Math.min(1, finalRef));
-                                }
+                                if (doClamp01) finalRef = Math.max(0, Math.min(1, finalRef));
                                 if (doClampSafe) {
                                     const eps = 1e-6;
                                     finalRef = Math.max(eps, Math.min(1.0 - eps, finalRef));
                                 }
 
-                                const result = await runCompareFragment(fmt.format, texture, finalRef, comparePipeline);
+                                const result = await runCompareFragment(fmt.format, texture, finalRef, comparePipeline, compareFunc);
                                 
                                 let cellContent = `${result}`;
                                 if (finalRef !== refDepth) {
@@ -279,10 +307,10 @@
             }
         }
 
-        async function runCompareFragment(format, texture, refDepth, pipeline) {
+        async function runCompareFragment(format, texture, refDepth, pipeline, compareFunc) {
             device.pushErrorScope('validation');
 
-            const sampler = device.createSampler({ compare: 'less-equal' });
+            const sampler = device.createSampler({ compare: compareFunc });
 
             const configBuffer = device.createBuffer({
                 size: 8,
@@ -291,8 +319,9 @@
             device.queue.writeBuffer(configBuffer, 0, new Uint32Array([format === 'depth32float' ? 1 : 0]));
             device.queue.writeBuffer(configBuffer, 4, new Float32Array([refDepth]));
 
+            // Increased output texture size to 256x256
             const outputTexture = device.createTexture({
-                size: [1, 1],
+                size: [256, 256],
                 format: 'r32float',
                 usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
             });
@@ -332,9 +361,11 @@
                 size: 4,
                 usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
             });
+
+            // Only copy the center pixel (128, 128)
             encoder.copyTextureToBuffer(
-                { texture: outputTexture },
-                { buffer: readBuffer, bytesPerRow: 256 },
+                { texture: outputTexture, origin: { x: 128, y: 128, z: 0 } },
+                { buffer: readBuffer },
                 { width: 1, height: 1 }
             );
 
