@@ -120,7 +120,7 @@
 
             <div class="checkbox-group">
                 <input type="checkbox" id="fixed-uv-chk">
-                <label for="fixed-uv-chk">Fixed Sample Location (0.5, 0.5)</label>
+                <label for="fixed-uv-chk">Reduced UV Range around (0.5, 0.5)</label>
             </div>
         </div>
     </div>
@@ -221,7 +221,9 @@
             fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
                 var uv = pos.xy / 256.0;
                 if (config.use_fixed_uv == 1u) {
-                    uv = vec2<f32>(0.5, 0.5);
+                    // Reduce UV space to a tiny range around 0.5, 0.5
+                    // This keeps derivatives non-zero but samples essentially the same center pixel
+                    uv = 0.5 + (uv - 0.5) * 0.00001;
                 }
                 
                 var depth_ref = pos.y / 256.0; // Default: vary reference across Y
@@ -352,7 +354,7 @@
                 compPass.end();
                 device.queue.submit([compEncoder.finish()]);
 
-                resultsDiv.innerHTML = `<p class="info">Test complete: Format=${fmt}, Mechanism=${mechanismIdx}, Compare=${compareFunc}, ManualRef=${useManualRef ? manualRefVal.toFixed(2) : 'No'}, FixedUV=${useFixedUv}</p>`;
+                resultsDiv.innerHTML = `<p class="info">Test complete: Format=${fmt}, Mechanism=${mechanismIdx}, Compare=${compareFunc}, ManualRef=${useManualRef ? manualRefVal.toFixed(2) : 'No'}, ReducedUV=${useFixedUv}</p>`;
 
             } catch (e) {
                 resultsDiv.innerHTML = `<div class="error"><h3>Error</h3><p>${e.message}</p></div>`;
