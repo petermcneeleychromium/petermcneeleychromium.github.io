@@ -74,7 +74,7 @@
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Visual Test2</h1>
+        <h1>WebGPU textureSampleCompare Visual Test4</h1>
         <div id="status">Initializing...</div>
     </header>
 
@@ -227,20 +227,12 @@
                
                 
                 var depth_ref = pos.y / 256.0;
-                if (config.use_manual_ref == 1u) {
-                    depth_ref = config.manual_ref_val;
-                }
+             
                 
                 var res : f32 = 0.0;
-                if (config.mechanism_idx == 0u) {
-                    res = textureSampleCompare(t_depth, s_compare, uv, depth_ref);
-                } else if (config.mechanism_idx == 1u) {
+
                     res = textureSampleCompareLevel(t_depth, s_compare, uv, depth_ref);
-                } else {
-                    let gather_res = textureGatherCompare(t_depth, s_compare, uv, depth_ref);
-                    res = (gather_res.x + gather_res.y + gather_res.z + gather_res.w) * 0.25;
-                }
-                
+           
                 return vec4<f32>(res, 0.0, 0.0, 1.0);
             }
         `;
