@@ -74,7 +74,7 @@
 </head>
 <body>
     <header>
-        <h1>WebGPU textureSampleCompare Visual Test 6</h1>
+        <h1>WebGPU textureSampleCompare Visual Test 7</h1>
         <div id="status">Initializing...</div>
     </header>
 
@@ -229,7 +229,7 @@
                 
                 var depth_ref = pos.y / 256.0;
              
-                
+                workgroupBarrier();
                 var res : f32 = 0.0;
 
                     res = textureSampleCompareLevel(t_depth, s_compare, uv, depth_ref);
