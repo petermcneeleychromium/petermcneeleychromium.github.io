@@ -69,7 +69,7 @@
         .legend { margin-top: 10px; display: flex; gap: 20px; font-size: 0.85rem; }
         .legend-item { display: flex; align-items: center; gap: 5px; }
         .color-box { width: 12px; height: 12px; border: 1px solid #fff; }
-        input[type="range"] { width: 200px; }
+        input[type="range"] { width: 150px; }
     </style>
 </head>
 <body>
@@ -113,15 +113,17 @@
         <div class="control-row">
             <div class="checkbox-group">
                 <input type="checkbox" id="manual-ref-chk" onchange="updateSliderState()">
-                <label for="manual-ref-chk">Manual Reference Value:</label>
+                <label for="manual-ref-chk">Manual Reference:</label>
             </div>
-            <input type="range" id="manual-ref-slider" min="-0.5" max="1.5" step="0.01" value="0.5" disabled oninput="updateSliderValLabel()">
+            <input type="range" id="manual-ref-slider" min="-0.5" max="1.5" step="0.01" value="0.5" disabled oninput="updateSliderLabels()">
             <span id="slider-val-label">0.50</span>
 
             <div class="checkbox-group">
-                <input type="checkbox" id="fixed-uv-chk">
-                <label for="fixed-uv-chk">Reduced UV Range around (0.5, 0.5)</label>
+                <input type="checkbox" id="fixed-uv-chk" onchange="updateSliderState()">
+                <label for="fixed-uv-chk">UV Scale around (0.5, 0.5):</label>
             </div>
+            <input type="range" id="uv-scale-slider" min="0.01" max="1.0" step="0.01" value="1.0" disabled oninput="updateSliderLabels()">
+            <span id="uv-scale-label">1.00</span>
         </div>
     </div>
 
@@ -145,13 +147,13 @@
         const context = canvas.getContext('webgpu');
 
         window.updateSliderState = () => {
-            const chk = document.getElementById('manual-ref-chk');
-            document.getElementById('manual-ref-slider').disabled = !chk.checked;
+            document.getElementById('manual-ref-slider').disabled = !document.getElementById('manual-ref-chk').checked;
+            document.getElementById('uv-scale-slider').disabled = !document.getElementById('fixed-uv-chk').checked;
         };
 
-        window.updateSliderValLabel = () => {
-            const val = document.getElementById('manual-ref-slider').value;
-            document.getElementById('slider-val-label').innerText = parseFloat(val).toFixed(2);
+        window.updateSliderLabels = () => {
+            document.getElementById('slider-val-label').innerText = parseFloat(document.getElementById('manual-ref-slider').value).toFixed(2);
+            document.getElementById('uv-scale-label').innerText = parseFloat(document.getElementById('uv-scale-slider').value).toFixed(2);
         };
 
         async function init() {
@@ -190,7 +192,6 @@
 
             @fragment
             fn fs_main(@builtin(position) pos : vec4<f32>) -> @builtin(frag_depth) f32 {
-                // Vary depth from 0.0 to 1.0 across X
                 return pos.x / 256.0;
             }
         `;
@@ -203,6 +204,7 @@
                 mechanism_idx : u32,
                 use_manual_ref : u32,
                 use_fixed_uv : u32,
+                uv_scale : f32,
                 manual_ref_val : f32,
             };
             @group(0) @binding(2) var<storage, read> config : Config;
@@ -221,12 +223,10 @@
             fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
                 var uv = pos.xy / 256.0;
                 if (config.use_fixed_uv == 1u) {
-                    // Reduce UV space to a tiny range around 0.5, 0.5
-                    // This keeps derivatives non-zero but samples essentially the same center pixel
-                    uv = 0.5 + (uv - 0.5) * 0.1;
+                    uv = 0.5 + (uv - 0.5) * config.uv_scale;
                 }
                 
-                var depth_ref = pos.y / 256.0; // Default: vary reference across Y
+                var depth_ref = pos.y / 256.0;
                 if (config.use_manual_ref == 1u) {
                     depth_ref = config.manual_ref_val;
                 }
@@ -264,6 +264,7 @@
             const useManualRef = document.getElementById('manual-ref-chk').checked;
             const manualRefVal = parseFloat(document.getElementById('manual-ref-slider').value);
             const useFixedUv = document.getElementById('fixed-uv-chk').checked;
+            const uvScale = parseFloat(document.getElementById('uv-scale-slider').value);
 
             try {
                 const initModule = device.createShaderModule({ code: depthInitShaderCode });
@@ -318,15 +319,16 @@
 
                 const sampler = device.createSampler({ compare: compareFunc });
                 const configBuffer = device.createBuffer({
-                    size: 16,
+                    size: 20,
                     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
                 });
                 
-                const configData = new ArrayBuffer(16);
+                const configData = new ArrayBuffer(20);
                 new Uint32Array(configData, 0, 1)[0] = mechanismIdx;
                 new Uint32Array(configData, 4, 1)[0] = useManualRef ? 1 : 0;
                 new Uint32Array(configData, 8, 1)[0] = useFixedUv ? 1 : 0;
-                new Float32Array(configData, 12, 1)[0] = manualRefVal;
+                new Float32Array(configData, 12, 1)[0] = uvScale;
+                new Float32Array(configData, 16, 1)[0] = manualRefVal;
                 
                 device.queue.writeBuffer(configBuffer, 0, configData);
 
@@ -354,7 +356,7 @@
                 compPass.end();
                 device.queue.submit([compEncoder.finish()]);
 
-                resultsDiv.innerHTML = `<p class="info">Test complete: Format=${fmt}, Mechanism=${mechanismIdx}, Compare=${compareFunc}, ManualRef=${useManualRef ? manualRefVal.toFixed(2) : 'No'}, ReducedUV=${useFixedUv}</p>`;
+                resultsDiv.innerHTML = `<p class="info">Test complete: Format=${fmt}, Mechanism=${mechanismIdx}, Compare=${compareFunc}, ManualRef=${useManualRef ? manualRefVal.toFixed(2) : 'No'}, UVScale=${useFixedUv ? uvScale.toFixed(2) : '1.0'}</p>`;
 
             } catch (e) {
                 resultsDiv.innerHTML = `<div class="error"><h3>Error</h3><p>${e.message}</p></div>`;
