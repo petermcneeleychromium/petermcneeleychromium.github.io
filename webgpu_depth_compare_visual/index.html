@@ -222,9 +222,9 @@
             @fragment
             fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
                 var uv = pos.xy / 256.0;
-                if (config.use_fixed_uv == 1u) {
+           
                     uv = 0.5 + (uv - 0.5) * config.uv_scale;
-                }
+               
                 
                 var depth_ref = pos.y / 256.0;
                 if (config.use_manual_ref == 1u) {
