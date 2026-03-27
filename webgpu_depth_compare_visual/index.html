@@ -117,6 +117,11 @@
             </div>
             <input type="range" id="manual-ref-slider" min="-0.5" max="1.5" step="0.01" value="0.5" disabled oninput="updateSliderValLabel()">
             <span id="slider-val-label">0.50</span>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="fixed-uv-chk">
+                <label for="fixed-uv-chk">Fixed Sample Location (0.5, 0.5)</label>
+            </div>
         </div>
     </div>
 
@@ -197,6 +202,7 @@
             struct Config {
                 mechanism_idx : u32,
                 use_manual_ref : u32,
+                use_fixed_uv : u32,
                 manual_ref_val : f32,
             };
             @group(0) @binding(2) var<storage, read> config : Config;
@@ -213,9 +219,12 @@
 
             @fragment
             fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
-                let uv = pos.xy / 256.0;
+                var uv = pos.xy / 256.0;
+                if (config.use_fixed_uv == 1u) {
+                    uv = vec2<f32>(0.5, 0.5);
+                }
                 
-                var depth_ref = uv.y; // Default: vary reference across Y
+                var depth_ref = pos.y / 256.0; // Default: vary reference across Y
                 if (config.use_manual_ref == 1u) {
                     depth_ref = config.manual_ref_val;
                 }
@@ -252,6 +261,7 @@
             
             const useManualRef = document.getElementById('manual-ref-chk').checked;
             const manualRefVal = parseFloat(document.getElementById('manual-ref-slider').value);
+            const useFixedUv = document.getElementById('fixed-uv-chk').checked;
 
             try {
                 const initModule = device.createShaderModule({ code: depthInitShaderCode });
@@ -306,14 +316,15 @@
 
                 const sampler = device.createSampler({ compare: compareFunc });
                 const configBuffer = device.createBuffer({
-                    size: 12,
+                    size: 16,
                     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
                 });
                 
-                const configData = new ArrayBuffer(12);
+                const configData = new ArrayBuffer(16);
                 new Uint32Array(configData, 0, 1)[0] = mechanismIdx;
                 new Uint32Array(configData, 4, 1)[0] = useManualRef ? 1 : 0;
-                new Float32Array(configData, 8, 1)[0] = manualRefVal;
+                new Uint32Array(configData, 8, 1)[0] = useFixedUv ? 1 : 0;
+                new Float32Array(configData, 12, 1)[0] = manualRefVal;
                 
                 device.queue.writeBuffer(configBuffer, 0, configData);
 
@@ -341,7 +352,7 @@
                 compPass.end();
                 device.queue.submit([compEncoder.finish()]);
 
-                resultsDiv.innerHTML = `<p class="info">Test complete: Format=${fmt}, Mechanism=${mechanismIdx}, Compare=${compareFunc}, ManualRef=${useManualRef ? manualRefVal.toFixed(2) : 'No'}</p>`;
+                resultsDiv.innerHTML = `<p class="info">Test complete: Format=${fmt}, Mechanism=${mechanismIdx}, Compare=${compareFunc}, ManualRef=${useManualRef ? manualRefVal.toFixed(2) : 'No'}, FixedUV=${useFixedUv}</p>`;
 
             } catch (e) {
                 resultsDiv.innerHTML = `<div class="error"><h3>Error</h3><p>${e.message}</p></div>`;
