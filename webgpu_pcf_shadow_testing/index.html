@@ -114,12 +114,28 @@
                         visibility = textureSampleCompareLevel(
                             shadowMap, shadowSampler, shadowPos.xy, shadowPos.z - bias 
                         );
-                    } else {
-                        // Gather (Manual)
+                    } else if (uniforms.mode < 1.5) {
+                        // Gather (Manual Box)
                         let temp = textureGatherCompare(
                             shadowMap, shadowSampler, shadowPos.xy, shadowPos.z - bias
                         );
                         visibility = dot(temp, vec4<f32>(0.25));
+                    } else {
+                        // Gather (Soft Lerp)
+                        let dim = vec2<f32>(textureDimensions(shadowMap, 0));
+                        let texelPos = shadowPos.xy * dim - 0.5;
+                        let i_j = floor(texelPos);
+                        let f = texelPos - i_j;
+                        let gatherUV = (i_j + 0.5) / dim;
+
+                        let temp = textureGatherCompare(
+                            shadowMap, shadowSampler, gatherUV, shadowPos.z - bias
+                        );
+                        // textureGatherCompare results:
+                        // [0]: (i, j+1), [1]: (i+1, j+1), [2]: (i+1, j), [3]: (i, j)
+                        let top = mix(temp.w, temp.z, f.x);
+                        let bottom = mix(temp.x, temp.y, f.x);
+                        visibility = mix(top, bottom, f.y);
                     }
                 } else {
                     visibility = 1.0; 
@@ -245,14 +261,16 @@
         const modeBtn = document.getElementById('modeBtn');
         const resBtn = document.getElementById('resBtn');
         
-        // Mode Toggle
-        let isGatherMode = false;
-        const modeData = new Float32Array([0.0]); 
+        // Mode Cycle
+        let modeIndex = 0; // 0: PCF, 1: Manual Box, 2: Soft Lerp
+        const modeData = new Float32Array([0.0]);
+        const modeNames = ["Mode: Sample (PCF)", "Mode: Gather (Manual Box)", "Mode: Gather (Soft Lerp)"];
+
         modeBtn.addEventListener('click', () => {
-            isGatherMode = !isGatherMode;
-            modeBtn.innerText = isGatherMode ? "Mode: Gather (Manual Box)" : "Mode: Sample (PCF)";
-            modeBtn.classList.toggle('active', isGatherMode);
-            modeData[0] = isGatherMode ? 1.0 : 0.0;
+            modeIndex = (modeIndex + 1) % modeNames.length;
+            modeBtn.innerText = modeNames[modeIndex];
+            modeBtn.classList.toggle('active', modeIndex !== 0);
+            modeData[0] = modeIndex;
         });
 
         // Resolution Cycle
